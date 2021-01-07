@@ -1,0 +1,6 @@
+[submodule "micropython-font-to-py"]
+	path = micropython-font-to-py
+	url = https://github.com/peterhinch/micropython-font-to-py
+[submodule "webrepl"]
+	path = webrepl
+	url = https://github.com/Hermann-SW/webrepl

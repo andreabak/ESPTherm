@@ -1,0 +1,8 @@
+{
+  "ui_secret_code": 123456,
+  "remote_therm": {
+    "enabled": true,
+    "switch_link_id": "tempstation/room",
+    "max_log_age": 30
+  }
+}

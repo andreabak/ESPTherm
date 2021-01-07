@@ -1,0 +1,14 @@
+[Unit]
+Description=ESPThermServer
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory="${INSTALLDIR}"
+ExecStart=/usr/sbin/runuser -u ${RUNUSER} -- "${RUNENVDIR}/bin/python" -m server --host "${SERVERADDR}" --port "${SERVERPORT}"
+ExecStartPost=firewall-cmd --add-port=${SERVERPORT}/tcp
+ExecStopPost=firewall-cmd --remove-port=${SERVERPORT}/tcp
+Restart=always
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,59 @@
+{
+  "temp_sensor": {
+    "adc_pin": 0,
+    "adc_cal_pin": 5,
+    "ntc_nom_r": 9950,
+    "ntc_nom_t": 25.0,
+    "ntc_bcoeff": 3435,
+    "ntc_div_r2": 10100,
+    "ntc_offset": 0
+  },
+  "dht": {
+    "pin": 12,
+    "temp_cal_mul": 0.96,
+    "temp_cal_offset": -1.0,
+    "rh_cal_mul": 1.0,
+    "rh_cal_offset": 0.0
+  },
+  "station": {
+    "values_average": 5,
+    "sched_temps": [
+      18.5, 18.0, 18.0, 17.5, 17.5, 18.0,
+      18.5, 19.0, 19.5, 20.0, 19.0, 18.5,
+      18.5, 18.5, 18.5, 18.5, 18.5, 18.5,
+      19.0, 19.5, 20.0, 19.0, 19.0, 18.5
+    ]
+  },
+  "oled": {
+    "spi_bus_id": 1,
+    "dc_pin": 4,
+    "res_pin": 0,
+    "cs_pin": 15,
+    "width": 128,
+    "height": 64
+  },
+  "battery": {
+    "vcc_adc_cal": 1.1,
+    "vcc_min": 2.40,
+    "vcc_max": 3.15,
+    "vcc_verylow": 2.35
+  },
+  "ifconfig": {
+    "address": "192.168.1.94",
+    "mask": "255.255.255.0",
+    "gateway": "192.168.1.1",
+    "dns": "1.1.1.1"
+  },
+  "server": {
+    "address": "192.168.1.64",
+    "port": 8367
+  },
+  "utc_delta": 1,
+  "update_interval": 60,
+  "sync_interval": 300,
+  "webrepl": {
+    "enable": false,
+    "password": "02aC7vA9",
+    "time_window": 60
+  }
+}

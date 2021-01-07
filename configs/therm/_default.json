@@ -1,0 +1,56 @@
+{
+  "temp_sensor": {
+    "adc_pin": 0,
+    "adc_max": 1023,
+    "ntc_nom_r": 9290,
+    "ntc_nom_t": 25.0,
+    "ntc_bcoeff": 3380,
+    "ntc_div_r2": 9910,
+    "ntc_offset": 0.0
+  },
+  "thermostat": {
+    "on_pin": 4,
+    "off_pin": 5,
+    "impulse_ms": 200,
+    "trigger_minseconds": 300,
+    "temps_average": 15,
+    "sched_temps": [
+      18.0, 17.5, 17.5, 17.5, 17.5, 18.0,
+      18.5, 19.0, 19.5, 20.0, 19.0, 18.5,
+      18.5, 18.0, 18.0, 18.0, 18.5, 18.5,
+      19.0, 19.5, 20.0, 19.0, 18.5, 18.5
+    ]
+  },
+  "antitamper": {
+    "latch_sense_pin": 12,
+    "latch_reset_pin": 14,
+    "reset_after_therm": false,
+    "grace_delay": 0,
+    "grace_max_daily": 0,
+    "grace_switch": true
+  },
+  "battery": {
+    "vcc_adc_cal": 1.075,
+    "vcc_min": 2.5,
+    "vcc_max": 2.85,
+    "vcc_verylow": 2.20
+  },
+  "ifconfig": {
+    "address": "192.168.1.93",
+    "mask": "255.255.255.0",
+    "gateway": "192.168.1.1",
+    "dns": "1.1.1.1"
+  },
+  "server": {
+    "address": "192.168.1.64",
+    "port": 8367
+  },
+  "utc_delta": 1,
+  "update_interval": 60,
+  "sync_interval": 900,
+  "webrepl": {
+    "enable": false,
+    "password": "02aC7vA9",
+    "time_window": 60
+  }
+}

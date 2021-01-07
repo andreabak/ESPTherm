@@ -1,0 +1,19 @@
+{% extends "base_page.jinja2" %}
+
+{% set title = "Status" %}
+
+{% block stylesheets %}
+    {{ super() }}
+    <link rel="stylesheet" href="static/status.css">
+{% endblock %}
+
+{% block scripts %}
+    {{ super() }}
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+    <script src="static/status.js" defer></script>
+{% endblock %}
+
+{% block content %}
+    <div id="therm_plot" style="width: 100%; height: 100%;"></div>
+    <div id="update_timer"></div>
+{% endblock %}

@@ -1,0 +1,233 @@
+@font-face {
+  font-family: 'AnnieUseYourTelescope';
+  src: url('fonts/AnnieUseYourTelescope-Regular.ttf') format('truetype');
+}
+@font-face {
+  font-family: 'DSEG14Modern';
+  src: url('fonts/DSEG14Modern-Regular.woff2') format('woff2'),
+       url('fonts/DSEG14Modern-Regular.woff') format('woff'),
+       url('fonts/DSEG14Modern-Regular.ttf') format('truetype');
+}
+@font-face {
+  font-family: 'DSEG14Modern';
+  src: url('fonts/DSEG14Modern-Italic.woff2') format('woff2'),
+       url('fonts/DSEG14Modern-Italic.woff') format('woff'),
+       url('fonts/DSEG14Modern-Italic.ttf') format('truetype');
+  font-style: italic, oblique;
+}
+@font-face {
+  font-family: 'DSEG14Modern';
+  src: url('fonts/DSEG14Modern-Bold.woff2') format('woff2'),
+       url('fonts/DSEG14Modern-Bold.woff') format('woff'),
+       url('fonts/DSEG14Modern-Bold.ttf') format('truetype');
+  font-weight: 700;
+}
+@font-face {
+  font-family: 'DSEG14Modern';
+  src: url('fonts/DSEG14Modern-BoldItalic.woff2') format('woff2'),
+       url('fonts/DSEG14Modern-BoldItalic.woff') format('woff'),
+       url('fonts/DSEG14Modern-BoldItalic.ttf') format('truetype');
+  font-weight: 700;
+  font-style: italic, oblique;
+}
+@font-face {
+  font-family: 'DSEG14Modern';
+  src: url('fonts/DSEG14Modern-Light.woff2') format('woff2'),
+       url('fonts/DSEG14Modern-Light.woff') format('woff'),
+       url('fonts/DSEG14Modern-Light.ttf') format('truetype');
+  font-weight: 200;
+}
+@font-face {
+  font-family: 'DSEG14Modern';
+  src: url('fonts/DSEG14Modern-LightItalic.woff2') format('woff2'),
+       url('fonts/DSEG14Modern-LightItalic.woff') format('woff'),
+       url('fonts/DSEG14Modern-LightItalic.ttf') format('truetype');
+  font-weight: 200;
+  font-style: italic, oblique;
+}
+
+html {
+  background-color: hsl(0, 0%, 12.5%);
+  width: 100%;
+  height: 100%;
+}
+body {
+  text-align: center;
+}
+#wholepad {
+  display: inline-grid;
+  font-size: min(9.5vw, 7.667vh);
+  margin: 0.5em;
+  justify-items: center;
+  grid-template-columns: auto;
+  grid-template-rows: 0.7fr 4fr;
+  grid-gap: .5em;
+  padding: .5em 1em .3em;
+  background-color: hsl(0, 0%, 66.7%);
+  border: .25em solid;
+  border-top-color: hsla(0, 0%, 100%, 0.4);
+  border-bottom-color: hsla(0, 0%, 0%, 0.5);
+  border-left-color: hsla(0, 0%, 0%, 0.3);
+  border-right-color: hsla(0, 0%, 0%, 0.4);
+  box-shadow: 0 0 0 0.0825em black, 0 0.1em 0.3em black;
+  background-origin: border-box;
+  background-image: 
+    linear-gradient(to bottom, rgba(0, 0, 0, 0.15) 0%, rgba(0, 0, 0, 0) .25em),
+    linear-gradient(to top, rgba(0, 0, 0, 0.25) 0%, rgba(0, 0, 0, 0) .25em),
+    linear-gradient(to right, rgba(0, 0, 0, 0.2) 0%, rgba(0, 0, 0, 0) .25em),
+    linear-gradient(to left, rgba(0, 0, 0, 0.2) 0%, rgba(0, 0, 0, 0) .25em);
+}
+#wholepad form {
+  display: contents;
+}
+#display_box {
+  display: grid;
+  justify-items: start;
+  align-items: center;
+  width: 6.2em;
+  box-sizing: border-box;
+  border: .025em solid black;
+  border-radius: .05em;
+  background-color: rgba(0, 0, 0, 0.9);
+  box-shadow: 0 0 0 .05em rgba(255, 255, 255, 0.8), 0 0 0 .2em rgba(0, 0, 0, 0.5);
+  padding: 0.1em 0.5em;
+  text-align: center;
+  font-family: "DSEG14Modern";
+  position: relative;
+}
+#display_box::after {
+  box-sizing: border-box;
+  grid-row: 1;
+  grid-column: 1;
+  content: '~~~~~~';
+  display: block;
+  z-index: 15;
+  color: hsla(0, 0%, 100%, 0.075);
+}
+#display {
+  grid-row: 1;
+  grid-column: 1;
+  z-index: 20;
+  font: inherit;
+  color: hsla(120deg, 100%, 33.3%, 1.0);
+  background: none;
+  border: none;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  font-family: inherit;
+}
+#display.error {
+  color: hsla(0deg, 100%, 45%, 1.0);
+}
+#pinpad {
+  display: grid;
+  grid-template-columns: repeat(3, 2em);
+  grid-template-rows: repeat(4, 2em);
+  grid-gap: .1em;
+  font-family: "AnnieUseYourTelescope";
+}
+#pinpad .pinpad_bg {
+  background-color: rgba(0, 0, 0, 0.5);
+  grid-column: 1 / span 3;
+  grid-row: 1 / span 4;
+  z-index: 1;
+  margin: .1em;
+  margin-bottom: -.175em;
+}
+.pad_btn {
+  display: flex;
+  font: inherit;
+  font-size: 1.6667em;
+  border: 0.025em solid black;
+  border-radius: .05em;
+  outline: none;
+  -webkit-tap-highlight-color: transparent;
+  user-select: none;
+  background-color: hsl(0, 0%, 66.7%);
+  background-origin: border-box;
+  background-image: 
+    linear-gradient(to bottom, rgba(0, 0, 0, 0.2) 0%, rgba(0, 0, 0, 0.06) .15em, rgba(0, 0, 0, 0) .15em),
+    linear-gradient(to top, rgba(0, 0, 0, 0.6) 0%, rgba(0, 0, 0, 0.18) .15em, rgba(0, 0, 0, 0) .15em),
+    linear-gradient(to right, rgba(0, 0, 0, 0.4) 0%, rgba(0, 0, 0, 0.12) .15em, rgba(0, 0, 0, 0) .15em),
+    linear-gradient(to left, rgba(0, 0, 0, 0.5) 0%, rgba(0, 0, 0, 0.15) .15em, rgba(0, 0, 0, 0) .15em);
+  color: black;
+  justify-content: center;
+  align-items: center;
+  z-index: 10;
+  cursor: pointer;
+  transition: box-shadow 1s ease-out;
+}
+.pad_btn:active {
+  box-shadow: 0 0 1.5em inset hsla(180deg, 100%, 55%, 0.6), 0 0 .375em hsla(180deg, 100%, 55%, 0.6);
+  transition: box-shadow 0.05s ease-out;
+}
+.pad_btn span {
+  margin-top: -.06em;
+}
+#btn_no1 {
+  grid-row: 1;
+  grid-column: 1;
+}
+#btn_no2 {
+  grid-row: 1;
+  grid-column: 2;
+}
+#btn_no3 {
+  grid-row: 1;
+  grid-column: 3;
+}
+#btn_no4 {
+  grid-row: 2;
+  grid-column: 1;
+  padding-top: .15em;
+}
+#btn_no5 {
+  grid-row: 2;
+  grid-column: 2;
+}
+#btn_no6 {
+  grid-row: 2;
+  grid-column: 3;
+}
+#btn_no7 {
+  grid-row: 3;
+  grid-column: 1;
+}
+#btn_no8 {
+  grid-row: 3;
+  grid-column: 2;
+}
+#btn_no9 {
+  grid-row: 3;
+  grid-column: 3;
+}
+#btn_no0 {
+  grid-row: 4;
+  grid-column: 2;
+}
+#btn_cancel {
+  grid-row: 4;
+  grid-column: 1;
+  background-color: hsl(20deg, 85%, 40%);
+  padding-top: .1em;
+}
+#btn_cancel:active {
+  box-shadow: 0 0 1.5em inset hsla(0deg, 100%, 50%, 0.5), 0 0 .375em hsla(0deg, 100%, 50%, 0.5);
+}
+#btn_cancel span {
+  transform: scaleX(1.5);
+}
+#btn_ok {
+  grid-row: 4;
+  grid-column: 3;
+  background-color: hsl(90deg, 85%, 40%);
+  padding-bottom: .05em;
+  padding-left: .45em;
+}
+#btn_ok:active {
+  box-shadow: 0 0 1.5em inset hsla(120deg, 100%, 50%, 0.5), 0 0 .375em hsla(120deg, 100%, 50%, 0.5);
+}
+#btn_ok > span {
+  transform: scaleX(1.3);
+}

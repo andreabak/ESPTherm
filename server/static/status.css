@@ -1,0 +1,12 @@
+html {
+  background-color: rgb(17, 17, 17);
+}
+#update_timer {
+  text-align: right;
+  color: white;
+  font-family: sans-serif;
+  margin: .5em;
+}
+svg .trace {
+  mix-blend-mode: hard-light;
+}
