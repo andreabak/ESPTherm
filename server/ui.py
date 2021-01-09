@@ -80,12 +80,13 @@ def auth_page() -> Response:
     return render_template('pinpad.jinja2')
 
 
-def format_time(seconds: float, precision: int = 2, with_letters: bool = True) -> str:
+def format_time(seconds: float, precision: int = 2, with_seconds: bool = True, with_letters: bool = True) -> str:
     """
     Format a duration in seconds into a timer-like string
     :param seconds: The number of seconds
     :param precision: The amount of digits for the decimal part of the seconds
-    :param with_letters: If True, use letter formatting instead of colons
+    :param with_seconds: If False, exclude seconds from the output. Default True
+    :param with_letters: If True, use letter formatting instead of colons. Default True
     :return: The formatted "timer" string
     """
     s_fmt_l: int = precision + 3 if precision else 2
@@ -97,9 +98,11 @@ def format_time(seconds: float, precision: int = 2, with_letters: bool = True) -
     h_fmt: str = f'{h:d}'
     m_fmt: str = ('{:02d}' if seconds >= 3600 else '{:d}').format(m)
     s_fmt: str = (s_fmt_spec_full if seconds >= 60 else s_fmt_spec_min).format(s) + ('s' if with_letters else '')
-    ms_fmt: str = f'{m_fmt}m {s_fmt}' if with_letters else f'{m_fmt}:{s_fmt}'
-    hms_fmt: str = f'{h_fmt}h {ms_fmt}' if with_letters else f'{h_fmt}:{ms_fmt}'
-    timer: str = (hms_fmt if seconds >= 3600 else (ms_fmt if seconds >= 60 else s_fmt))
+    separator: str = ' ' if with_letters else ':'
+    ms_pre_fmt: str = f'{m_fmt}m' if with_letters else f'{m_fmt}'
+    ms_fmt: str = separator.join([ms_pre_fmt] + ([s_fmt] if with_seconds else []))
+    hms_fmt: str = separator.join((f'{h_fmt}h' if with_letters else f'{h_fmt}', ms_fmt))
+    timer: str = (hms_fmt if seconds >= 3600 else (ms_fmt if (not with_seconds or seconds >= 60) else s_fmt))
     return timer
 
 
@@ -329,8 +332,8 @@ def mktrace_temps_set(*, log: ThermDeviceLog, timeaxis: np.ndarray, values: Opti
             name=f'{log.device_id} target' + (' ' + name_postfix if name_postfix else ''),
             meta=dict(id=f'{log_device_full_id(log)}.temp_set{"." + name_postfix if name_postfix else ""}'),
             legendgroup=log_device_full_id(log), showlegend=showlegend,
-            mode='lines', line=dict(color=f'hsla({hue:.0f}, 75%, 50%, {0.67 * opacity})', dash=line_dash),
-            fillcolor=f'hsla({hue:.0f}, 75%, 50%, {0.2 * opacity})', fill='tozeroy',
+            mode='lines', line=dict(color=f'hsla({hue:.0f}, 75%, 50%, {0.5 * opacity})', dash=line_dash),
+            fillcolor=f'hsla({hue:.0f}, 75%, 50%, {0.1 * opacity})', fill='tozeroy',
             opacity=opacity
         )
     else:
@@ -381,6 +384,10 @@ def mktrace_switch_times(*, log: ThermDeviceLog, timeaxis: np.ndarray, hue: floa
     switch_segments: List[Tuple[int, int]] = list(zip(switch_starts, switch_ends))
     segments_ms: np.ndarray = np.array([s.total_seconds() * 1000 for s
                                         in timeaxis[switch_ends] - timeaxis[switch_starts]])
+    segments_text: List[str] = [f'{log.device_id}: ON for '
+                                f'{format_time((timeaxis[s[1]] - timeaxis[s[0]]).total_seconds(), with_seconds=False)}<br>'
+                                f'(from {timeaxis[s[0]].strftime("%H:%M")} to {timeaxis[s[1]].strftime("%H:%M")})'
+                                for s in switch_segments]
     trace = plotly_go.Bar(
         name=f'{log.device_id} switch',
         meta=dict(id=f'{log_device_full_id(log)}.switch'),
@@ -389,9 +396,7 @@ def mktrace_switch_times(*, log: ThermDeviceLog, timeaxis: np.ndarray, hue: floa
         width=segments_ms,
         offset=0,
         y=np.ones(len(switch_starts)),
-        text=[f'{log.device_id}: ON for {format_time((timeaxis[s[1]] - timeaxis[s[0]]).total_seconds(), precision=0)}<br>'
-              f'(from {timeaxis[s[0]].strftime("%X")} to {timeaxis[s[1]].strftime("%X")})'
-              for s in switch_segments],
+        text=segments_text,
         textposition='inside',
         textfont=dict(color='rgba(255, 255, 255, 0.67)'),
         hoverinfo='skip',
@@ -409,6 +414,9 @@ def mktrace_missing_data(*, log: DeviceLog, timeaxis: np.ndarray, interval_thres
         -> BaseTraceType:
     timestamps_intervals: np.ndarray = np.array([td.total_seconds() for td in (timeaxis[1:] - timeaxis[:-1])])
     missing_data_starts: np.ndarray = np.where(timestamps_intervals > interval_threshold)[0]
+    texts: List[str] = [f'{log.device_id}: no data for {format_time(timestamps_intervals[s], with_seconds=False)}<br>'
+                        f'(from {timeaxis[s].strftime("%H:%M")} to {timeaxis[s+1].strftime("%H:%M")})'
+                        for s in missing_data_starts]
     trace = plotly_go.Bar(
         name=f'{log.device_id} missing',
         meta=dict(id=f'{log_device_full_id(log)}.missing'),
@@ -419,9 +427,7 @@ def mktrace_missing_data(*, log: DeviceLog, timeaxis: np.ndarray, interval_thres
         offset=0,
         y=-np.ones(missing_data_starts.size),
         base=np.ones(missing_data_starts.size),
-        text=[f'{log.device_id}: no data for {format_time(timestamps_intervals[s], precision=0)}<br>'
-              f'(from {timeaxis[s].strftime("%X")} to {timeaxis[s+1].strftime("%X")})'
-              for s in missing_data_starts],
+        text=texts,
         textposition='inside',
         textfont=dict(color='rgba(255, 255, 255, 0.4)'),
         hoverinfo='skip',
