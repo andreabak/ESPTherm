@@ -627,7 +627,10 @@ class Device(ABC):
 
     @property
     def log_daily(self) -> _LT:
-        return self.get_log(timestamp_min=datetime.now() - timedelta(hours=24))  # TODO: UTC conversion
+        # TODO: UTC conversion? Check
+        # Rounding to hour to allow caching
+        daily_min_dt: datetime = (datetime.now() - timedelta(hours=24)).replace(minute=0, second=0, microsecond=0)
+        return self.get_log(timestamp_min=daily_min_dt)
 
 
 @dataclasses.dataclass(frozen=True)

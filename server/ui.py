@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from functools import wraps
 from inspect import signature, Parameter
-from typing import List, MutableMapping, Optional, Tuple, Any, Callable, Iterator, Union
+from typing import List, MutableMapping, Optional, Tuple, Any, Callable, Iterator, Union, Sequence
 
 import numpy as np
 import plotly
@@ -200,14 +200,21 @@ def make_np_array(*, log: DeviceLog, field_name: str, cast: Optional[Callable] =
 
 
 @log_cacheable
+def make_masked_arrays(*arrays: np.ndarray, mask: np.ndarray, log: DeviceLog) -> Sequence[np.ndarray]:
+    return tuple(a[mask] for a in arrays)
+
+
+@log_cacheable
 def mktrace_temps_avg(*, log: TempsDeviceLog, timeaxis: np.ndarray, hue: float = 210, line_dash: str = 'solid',
                       opacity: float = 1.0) \
         -> Tuple[BaseTraceType, np.ndarray, np.ndarray, Tuple[float, float]]:
     temps_avg, temps_avg_mask = make_np_array(log=log, field_name='temp_average')
-    timeaxis = timeaxis[temps_avg_mask]
+    timeaxis_masked: np.ndarray
+    temps_avg_masked: np.ndarray
+    timeaxis_masked, temps_avg_masked = make_masked_arrays(timeaxis, temps_avg, mask=temps_avg_mask, log=log)
     if temps_avg_mask.size:
         trace = plotly_go.Scatter(
-            x=timeaxis, y=temps_avg[temps_avg_mask], yaxis='y2',
+            x=timeaxis_masked, y=temps_avg_masked, yaxis='y2',
             name=f'{log.device_id} temp',
             meta=dict(id=f'{log_device_full_id(log)}.temp_avg'),
             legendgroup=log_device_full_id(log),
@@ -216,7 +223,7 @@ def mktrace_temps_avg(*, log: TempsDeviceLog, timeaxis: np.ndarray, hue: float =
         )
     else:
         trace = None
-    return trace, temps_avg, temps_avg_mask, get_percentile_range(temps_avg[temps_avg_mask])
+    return trace, temps_avg_masked, timeaxis_masked, get_percentile_range(temps_avg_masked)
 
 
 @log_cacheable
@@ -224,10 +231,12 @@ def mktrace_rhs_avg(*, log: TempStationDeviceLog, timeaxis: np.ndarray, hue: flo
                     opacity: float = 1.0) \
         -> Tuple[BaseTraceType, np.ndarray, np.ndarray, Tuple[float, float]]:
     rhs_avg, rhs_avg_mask = make_np_array(log=log, field_name='humidity_average')
-    timeaxis = timeaxis[rhs_avg_mask]
+    timeaxis_masked: np.ndarray
+    rhs_avg_masked: np.ndarray
+    timeaxis_masked, rhs_avg_masked = make_masked_arrays(timeaxis, rhs_avg, mask=rhs_avg_mask, log=log)
     if rhs_avg_mask.size:
         trace = plotly_go.Scatter(
-            x=timeaxis, y=rhs_avg[rhs_avg_mask], yaxis='y3',
+            x=timeaxis_masked, y=rhs_avg_masked, yaxis='y3',
             name=f'{log.device_id} rh',
             meta=dict(id=f'{log_device_full_id(log)}.rh_avg'),
             legendgroup=log_device_full_id(log),
@@ -236,7 +245,7 @@ def mktrace_rhs_avg(*, log: TempStationDeviceLog, timeaxis: np.ndarray, hue: flo
         )
     else:
         trace = None
-    return trace, rhs_avg, rhs_avg_mask, get_percentile_range(rhs_avg[rhs_avg_mask])
+    return trace, rhs_avg_masked, timeaxis_masked, get_percentile_range(rhs_avg_masked)
 
 
 @log_cacheable
@@ -310,11 +319,13 @@ def mktrace_temps_set(*, log: ThermDeviceLog, timeaxis: np.ndarray, values: Opti
     else:
         temps_set = values
         temps_set_mask = np.arange(temps_set.size)
-    timeaxis = timeaxis[temps_set_mask]
+    timeaxis_masked: np.ndarray
+    temps_set_masked: np.ndarray
+    timeaxis_masked, temps_set_masked = make_masked_arrays(timeaxis, temps_set, mask=temps_set_mask, log=log)
     # TODO: Simplify trace by removing contiguous values and use straight instead of splines (might be already)
     if temps_set_mask.size:
         trace = plotly_go.Scatter(
-            x=timeaxis, y=temps_set[temps_set_mask], yaxis='y2',
+            x=timeaxis_masked, y=temps_set_masked, yaxis='y2',
             name=f'{log.device_id} target' + (' ' + name_postfix if name_postfix else ''),
             meta=dict(id=f'{log_device_full_id(log)}.temp_set{"." + name_postfix if name_postfix else ""}'),
             legendgroup=log_device_full_id(log), showlegend=showlegend,
@@ -324,7 +335,7 @@ def mktrace_temps_set(*, log: ThermDeviceLog, timeaxis: np.ndarray, values: Opti
         )
     else:
         trace = None
-    return trace, temps_set, temps_set_mask, get_percentile_range(temps_set[temps_set_mask])
+    return trace, temps_set_masked, timeaxis_masked, get_percentile_range(temps_set_masked)
 
 
 @log_cacheable
@@ -332,12 +343,14 @@ def mktrace_bat_voltage(*, log: DeviceLog, timeaxis: np.ndarray, hue: float = 21
                         opacity: float = 1.0) \
         -> Tuple[BaseTraceType, np.ndarray, np.ndarray, np.ndarray, Tuple[float, float]]:
     bat_voltage, bat_voltage_mask = make_np_array(log=log, field_name='battery_voltage')
-    timeaxis = timeaxis[bat_voltage_mask]
+    timeaxis_masked: np.ndarray
+    bat_voltage_masked: np.ndarray
+    timeaxis_masked, bat_voltage_masked = make_masked_arrays(timeaxis, bat_voltage, mask=bat_voltage_mask, log=log)
     bat_voltage_smooth: np.ndarray
     if bat_voltage_mask.size:
         bat_voltage_smooth = gaussian_filter1d(bat_voltage[bat_voltage_mask], 2.5, mode='mirror').round(3)
         trace = plotly_go.Scatter(
-            x=timeaxis, y=bat_voltage_smooth, yaxis='y4',
+            x=timeaxis_masked, y=bat_voltage_smooth, yaxis='y4',
             name=f'{log.device_id} vcc',
             meta=dict(id=f'{log_device_full_id(log)}.battery'),
             legendgroup=log_device_full_id(log),
@@ -348,7 +361,7 @@ def mktrace_bat_voltage(*, log: DeviceLog, timeaxis: np.ndarray, hue: float = 21
     else:
         bat_voltage_smooth = np.array([], dtype='float')
         trace = None
-    return trace, bat_voltage, bat_voltage_mask, bat_voltage_smooth, get_percentile_range(bat_voltage[bat_voltage_mask])
+    return trace, bat_voltage_masked, timeaxis_masked, bat_voltage_smooth, get_percentile_range(bat_voltage_masked)
 
 
 @log_cacheable
@@ -486,41 +499,43 @@ def create_plot_figure(devices: List[Device], plot_mode: Optional[str] = None,
         timeaxis = make_timeaxis(log=log, non_roundable_interval=device_update_interval * 1.5)
     
         if isinstance(log, (ThermDeviceLog, TempStationDeviceLog)):
-            temps_cur, temps_cur_mask = make_np_array(log=log, field_name='temp_current')
-    
-            temps_avg_trace, temps_avg, temps_avg_mask, temps_avg_range = mktrace_temps_avg(log=log, timeaxis=timeaxis,
-                                                                                            hue=hue)
+            temps_avg_trace, temps_avg, temps_avg_times, temps_avg_range = mktrace_temps_avg(log=log, timeaxis=timeaxis,
+                                                                                             hue=hue)
             if temps_avg_trace is not None:
                 fig.add_trace(temps_avg_trace, row=1, col=1, secondary_y=True)
                 y2ranges.append(temps_avg_range)
-                append_xrange(timeaxis[temps_avg_mask])
+                append_xrange(temps_avg_times)
                 if plot_mode != 'prepend':
-                    add_timed_annotation(fig, value=temps_avg[temps_avg_mask][-1], timestamp=timeaxis[temps_avg_mask][-1],
+                    add_timed_annotation(fig, value=temps_avg[-1], timestamp=temps_avg_times[-1],
                                          postfix='°C', yaxis='y2', hue=hue, row=1, col=1, secondary_y=True)
 
-                temps_houravg_trace, *_ = mktrace_houravg(log=log, values=temps_avg[temps_avg_mask],
-                                                          timeaxis=timeaxis[temps_avg_mask],
+                temps_houravg_trace, *_ = mktrace_houravg(log=log, values=temps_avg,
+                                                          timeaxis=temps_avg_times,
                                                           data_name='temp', yaxis='y2', hue=hue)
                 fig.add_trace(temps_houravg_trace, row=1, col=1, secondary_y=True)
 
+            temps_cur, temps_cur_mask = make_np_array(log=log, field_name='temp_current')
             if temps_cur_mask.size:
-                error_traces, raw_range = mktrace_peaks_valleys(log=log, values=temps_cur[temps_cur_mask],
-                                                                timeaxis=timeaxis[temps_cur_mask],
-                                                                values_ref=temps_avg[temps_avg_mask],
+                temps_cur_times: np.ndarray
+                temps_cur_masked: np.ndarray
+                temps_cur_times, temps_cur_masked = make_masked_arrays(timeaxis, temps_cur, mask=temps_cur_mask, log=log)
+                error_traces, raw_range = mktrace_peaks_valleys(log=log, values=temps_cur_masked,
+                                                                timeaxis=temps_cur_times,
+                                                                values_ref=temps_avg,
                                                                 data_name='temp', yaxis='y2', hue=hue)
                 if error_traces:
                     for t in error_traces:
                         fig.add_trace(t, row=1, col=1, secondary_y=True)
                     y2ranges.append(raw_range)
-                    append_xrange(timeaxis[temps_cur_mask])
+                    append_xrange(temps_cur_times)
 
             set_hue: float = math.fmod(hue - 150, 360)
-            temps_set_trace, temps_set, temps_set_mask, temps_set_range = mktrace_temps_set(log=log, timeaxis=timeaxis,
-                                                                                            hue=set_hue)
+            temps_set_trace, temps_set, temps_set_times, temps_set_range = mktrace_temps_set(log=log, timeaxis=timeaxis,
+                                                                                             hue=set_hue)
             if temps_set_trace is not None:
                 fig.add_trace(temps_set_trace, row=1, col=1, secondary_y=True)
                 y2ranges.append(temps_set_range)
-                append_xrange(timeaxis[temps_set_mask])
+                append_xrange(temps_set_times)
 
                 if plot_mode != 'prepend':
                     # TODO: Differentiate predicted traces, as to be able to delete them through js
@@ -550,34 +565,36 @@ def create_plot_figure(devices: List[Device], plot_mode: Optional[str] = None,
         if isinstance(log, TempStationDeviceLog):
             rh_hue: float = math.fmod(hue - 30, 360)
 
-            rhs_cur, rhs_cur_mask = make_np_array(log=log, field_name='humidity_current')
-
-            rhs_avg_trace, rhs_avg, rhs_avg_mask, rhs_avg_range = mktrace_rhs_avg(log=log, timeaxis=timeaxis,
-                                                                                  hue=rh_hue, opacity=0.4)
+            rhs_avg_trace, rhs_avg, rhs_avg_times, rhs_avg_range = mktrace_rhs_avg(log=log, timeaxis=timeaxis,
+                                                                                   hue=rh_hue, opacity=0.4)
             if rhs_avg_trace is not None:
                 fig.add_trace(rhs_avg_trace, row=2, col=1)
                 y3ranges.append(rhs_avg_range)
-                append_xrange(timeaxis[rhs_avg_mask])
+                append_xrange(rhs_avg_times)
                 if plot_mode != 'prepend':
-                    add_timed_annotation(fig, value=rhs_avg[rhs_avg_mask][-1], timestamp=timeaxis[rhs_avg_mask][-1],
+                    add_timed_annotation(fig, value=rhs_avg[-1], timestamp=rhs_avg_times[-1],
                                          postfix='%', yaxis='y3', hue=rh_hue, row=2, col=1)
 
-                rhs_houravg_trace, *_ = mktrace_houravg(log=log, values=rhs_avg[rhs_avg_mask],
-                                                        timeaxis=timeaxis[rhs_avg_mask],
+                rhs_houravg_trace, *_ = mktrace_houravg(log=log, values=rhs_avg,
+                                                        timeaxis=rhs_avg_times,
                                                         data_name='rh', yaxis='y3',
                                                         hue=rh_hue, opacity=0.4)
                 fig.add_trace(rhs_houravg_trace, row=2, col=1)
 
+            rhs_cur, rhs_cur_mask = make_np_array(log=log, field_name='humidity_current')
             if rhs_cur_mask.size:
-                error_traces, raw_range = mktrace_peaks_valleys(log=log, values=rhs_cur[rhs_cur_mask],
-                                                                timeaxis=timeaxis[rhs_cur_mask],
+                rhs_cur_times: np.ndarray
+                rhs_cur_masked: np.ndarray
+                rhs_cur_times, rhs_cur_masked = make_masked_arrays(timeaxis, rhs_cur, mask=rhs_cur_mask, log=log)
+                error_traces, raw_range = mktrace_peaks_valleys(log=log, values=rhs_cur_masked,
+                                                                timeaxis=rhs_cur_times,
                                                                 values_ref=rhs_avg, data_name='rh', yaxis='y3',
                                                                 hue=rh_hue, opacity=0.2)
                 if error_traces:
                     for t in error_traces:
                         fig.add_trace(t, row=2, col=1)
                     y3ranges.append(raw_range)
-                    append_xrange(timeaxis[rhs_cur_mask])
+                    append_xrange(rhs_cur_times)
 
         if isinstance(log, ThermDeviceLog):
             switch_hue: float = math.fmod(hue - 190, 360)
@@ -586,18 +603,18 @@ def create_plot_figure(devices: List[Device], plot_mode: Optional[str] = None,
                 fig.add_trace(switch_times_trace, row=1, col=1)
 
         bat_hue: float = math.fmod(hue - 15, 360)
-        bat_voltage_trace, bat_voltage, bat_voltage_mask, bat_voltage_smooth, bat_voltage_range = \
+        bat_voltage_trace, bat_voltage, bat_voltage_times, bat_voltage_smooth, bat_voltage_range = \
             mktrace_bat_voltage(log=log, timeaxis=timeaxis, hue=bat_hue)
         if bat_voltage_trace is not None:
             fig.add_trace(bat_voltage_trace, row=3, col=1)
             y4ranges.append(bat_voltage_range)
-            append_xrange(timeaxis[bat_voltage_mask])
+            append_xrange(bat_voltage_times)
             if plot_mode != 'prepend':
-                add_timed_annotation(fig, value=bat_voltage_smooth[-1], timestamp=timeaxis[bat_voltage_mask][-1],
+                add_timed_annotation(fig, value=bat_voltage_smooth[-1], timestamp=bat_voltage_times[-1],
                                      postfix='V', yaxis='y4', hue=bat_hue, row=3, col=1)
 
-            error_traces, raw_range = mktrace_peaks_valleys(log=log, values=bat_voltage[bat_voltage_mask],
-                                                            timeaxis=timeaxis[bat_voltage_mask],
+            error_traces, raw_range = mktrace_peaks_valleys(log=log, values=bat_voltage,
+                                                            timeaxis=bat_voltage_times,
                                                             values_ref=bat_voltage_smooth,
                                                             data_name='bat', yaxis='y4', hue=bat_hue)
             if error_traces:
