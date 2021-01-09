@@ -13,7 +13,7 @@ import plotly
 from plotly import graph_objs as plotly_go
 from plotly.basedatatypes import BaseTraceType
 from plotly.subplots import make_subplots
-from scipy.ndimage import gaussian_filter1d
+from scipy.ndimage import gaussian_filter1d, median_filter
 from scipy.signal import savgol_filter, find_peaks
 from dateutil.parser import parse as dateutil_parser
 from flask import request, url_for, jsonify, render_template, send_from_directory, redirect, Response
@@ -257,7 +257,7 @@ def mktrace_houravg(*, log: TempsDeviceLog, values: np.ndarray, timeaxis: np.nda
                     opacity: float = 1.0) \
         -> Tuple[BaseTraceType, np.ndarray, Tuple[float, float]]:
     filter_size: int = min(max(0, math.ceil(values.size / 2) * 2 - 1), 59)
-    values_houravg: np.ndarray = savgol_filter(values, filter_size, 4).round(2)
+    values_houravg: np.ndarray = savgol_filter(values, filter_size, 4)
     trace = plotly_go.Scatter(
         x=timeaxis, y=values_houravg, yaxis=yaxis,
         name=f'{log.device_id} {data_name} hour',
@@ -351,7 +351,10 @@ def mktrace_bat_voltage(*, log: DeviceLog, timeaxis: np.ndarray, hue: float = 21
     timeaxis_masked, bat_voltage_masked = make_masked_arrays(timeaxis, bat_voltage, mask=bat_voltage_mask, log=log)
     bat_voltage_smooth: np.ndarray
     if bat_voltage_mask.size:
-        bat_voltage_smooth = gaussian_filter1d(bat_voltage[bat_voltage_mask], 2.5, mode='mirror').round(3)
+        bat_voltage_smooth = bat_voltage_masked
+        bat_voltage_smooth = savgol_filter(bat_voltage_smooth, 9, 3, mode='mirror')
+        bat_voltage_smooth = median_filter(bat_voltage_smooth, 19, mode='mirror')
+        bat_voltage_smooth = gaussian_filter1d(bat_voltage_smooth, 10, mode='mirror')
         trace = plotly_go.Scatter(
             x=timeaxis_masked, y=bat_voltage_smooth, yaxis='y4',
             name=f'{log.device_id} vcc',
@@ -710,6 +713,7 @@ def create_plot_figure(devices: List[Device], plot_mode: Optional[str] = None,
         ),
         yaxis2=dict(  # temps
             title_text='temperature [°C]',
+            hoverformat='.2f',
             dtick=1,
             side='right',
             rangemode="nonnegative",
@@ -718,6 +722,7 @@ def create_plot_figure(devices: List[Device], plot_mode: Optional[str] = None,
         ),
         yaxis3=dict(  # rh
             title_text='humidity [%]',
+            hoverformat='.2f',
             # dtick=10,
             side='right',
             anchor='y2',
@@ -730,6 +735,7 @@ def create_plot_figure(devices: List[Device], plot_mode: Optional[str] = None,
         ),
         yaxis4=dict(  # bat voltage
             title_text='battery [V]',
+            hoverformat='.3f',
             side='right',
             # anchor='y3',
             # position=1,
