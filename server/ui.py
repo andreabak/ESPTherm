@@ -106,7 +106,7 @@ def format_time(seconds: float, precision: int = 2, with_seconds: bool = True, w
     return timer
 
 
-def get_percentile_range(data: np.ndarray, delta: float = 1.0) -> Tuple[Optional[float], Optional[float]]:
+def get_percentile_range(data: np.ndarray, delta: float = 2.0) -> Tuple[Optional[float], Optional[float]]:
     if not data.size:
         return None, None
     return np.percentile(data, 0.0 + delta), np.percentile(data, 100.0 - delta)
@@ -472,11 +472,11 @@ def create_plot_figure(devices: List[Device], plot_mode: Optional[str] = None,
     fig: plotly_go.Figure = make_subplots(
         rows=3, cols=1,
         shared_xaxes=True,
-        row_heights=[220, 260, 140],
+        row_heights=[180, 290, 150],
         specs=[[dict(secondary_y=True)],
-               [dict(t=0.18)],
+               [dict(t=0.22)],
                [dict()]],
-        vertical_spacing=0.04
+        vertical_spacing=0.02
     )
 
     xranges: List[Tuple[datetime, datetime]] = []
@@ -564,12 +564,13 @@ def create_plot_figure(devices: List[Device], plot_mode: Optional[str] = None,
                     predicted_timeaxis: np.ndarray = np.array([last_timeaxis_time]
                                                               + [next_timeaxis_hour + timedelta(minutes=m)
                                                                  for m in range(-last_hour_minutes, predicted_hours * 60)])
-                    temps_set_predicted_trace, *_, temps_set_predicted_range = \
+                    temps_set_predicted_trace, _, temps_set_predicted_times, temps_set_predicted_range = \
                         mktrace_temps_set(log=log, values=predicted_temps, timeaxis=predicted_timeaxis,
                                           name_postfix='predicted',
                                           hue=set_hue, showlegend=False, line_dash='dot', opacity=0.5)
                     fig.add_trace(temps_set_predicted_trace, row=1, col=1, secondary_y=True)
                     y2ranges.append(temps_set_predicted_range)
+                    append_xrange(temps_set_predicted_times)
 
         if isinstance(log, TempStationDeviceLog):
             rh_hue: float = math.fmod(hue - 30, 360)
@@ -643,7 +644,7 @@ def create_plot_figure(devices: List[Device], plot_mode: Optional[str] = None,
                       annotation_textangle=0,
                       annotation_position='bottom left',
                       annotation_font=dict(color='rgba(255, 191, 255, 0.8)', size=9),
-                      annotation_yshift=-3,
+                      annotation_yshift=10,
                       line_dash='dot',
                       line_color='magenta',
                       layer='below')
@@ -677,6 +678,26 @@ def create_plot_figure(devices: List[Device], plot_mode: Optional[str] = None,
                 range_max = min(limit_max, range_max)
         return range_min, range_max
 
+    xaxis_min: Optional[datetime] = None
+    xaxis_max: Optional[datetime] = None
+    if xranges:
+        xaxis_min, xaxis_max = compute_axis_range(xranges, pad=0)
+
+    # Add daily lines
+    dt = xaxis_min.replace(hour=0, minute=0, second=0, microsecond=0)
+    while dt < xaxis_max:
+        if dt >= xaxis_min:
+            fig.add_vline(x=dt.timestamp() * 1000,
+                          annotation_text=dt.strftime("%a, %d %b %Y"),
+                          annotation_textangle=0,
+                          annotation_position='bottom right',
+                          annotation_font=dict(color='rgba(191, 255, 255, 0.8)', size=9),
+                          annotation_yshift=-2,
+                          line_dash='dot',
+                          line_color='rgba(191, 255, 255, 0.8)',
+                          layer='below')
+        dt += timedelta(days=1)
+
     y2range: Optional[Tuple[RangedType]] = compute_axis_range(y2ranges, limits=(0.0, None))
     y3range: Optional[Tuple[RangedType]] = compute_axis_range(y3ranges, limits=(0.0, None))
     y4range: Optional[Tuple[RangedType]] = compute_axis_range(y4ranges, limits=(0.0, None))
@@ -685,6 +706,7 @@ def create_plot_figure(devices: List[Device], plot_mode: Optional[str] = None,
         height=560,
         margin=dict(l=0, r=0, t=0, b=0),
         xaxis=dict(
+            showticklabels=True,
             range=[datetime.now() - timedelta(hours=12), plot_until],
             rangeslider=dict(visible=True, thickness=0.1),
             rangeselector=dict(
@@ -758,13 +780,9 @@ def create_plot_figure(devices: List[Device], plot_mode: Optional[str] = None,
         hoverdistance=1,
         dragmode='pan',
     )
-    fig.update_xaxes(showgrid=True, dtick=3600000, row=1, col=1)
-    fig.update_xaxes(showgrid=True, dtick=3600000, row=2, col=1)
-    fig.update_xaxes(showgrid=True, dtick=3600000, row=3, col=1)
-    xaxis_min: Optional[datetime] = None
-    xaxis_max: Optional[datetime] = None
-    if xranges:
-        xaxis_min, xaxis_max = compute_axis_range(xranges, pad=0)
+    for row in range(1, 4):
+        fig.update_xaxes(showgrid=True, dtick=3600000, tickangle=0, tickformat='%-H:%M', hoverformat='%d/%m/%Y %H:%M',
+                         row=row, col=1)
     return fig, xaxis_min, xaxis_max
 
 

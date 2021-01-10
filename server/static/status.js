@@ -36,9 +36,19 @@ $(window).on('load', function () {
     let disableAutoRefresh = function () {
         autoRefresh = false;
         if (updateTimer !== null) {
-            window.cancelTimeout(updateTimer);
+            window.clearTimeout(updateTimer);
             updateTimer = null;
         }
+    };
+    let adjustTicks = function () {
+        const plotWidth = $(plotDiv).width();
+        const plotHrRange = ((new Date(plotDiv.layout.xaxis.range[1])).getTime()
+                            - (new Date(plotDiv.layout.xaxis.range[0])).getTime()) / 3600000;
+        const exp = 1 + Math.floor(Math.log2(36 * (plotHrRange / plotWidth)));
+        const scale = (exp > 0) ? (3 * (Math.pow(2, exp) / 2)) : 1;
+        const dyntick = scale * 60 * 60 * 1000;
+        if (dyntick != plotDiv.layout.xaxis.dtick)
+            Plotly.relayout(plotDiv, {"xaxis.dtick": dyntick, "xaxis2.dtick": dyntick, "xaxis3.dtick": dyntick});
     };
     let createPlot = function (loadFrom, loadTo, exclusiveBounds, mode) {
         let queryArgs = {};
@@ -109,6 +119,7 @@ $(window).on('load', function () {
                         if (isNewTrace)
                             newTraces.push(respTrace);
                     }
+                    plotDiv.layout.shapes = concatArrays(plotDiv.layout.shapes, plots.layout.shapes, mode);
                     plotDiv.layout.annotations = concatArrays(plotDiv.layout.annotations, plots.layout.annotations, mode);
                     for (key in plotDiv.layout) {  // recalc axis ranges, keeping track of existing ones
                         if (key.indexOf('yaxis') != -1) {
@@ -141,7 +152,7 @@ $(window).on('load', function () {
                 } else {
                     Plotly.react(plotDiv, plots);
                 }
-                // TODO: Change dtick when zooming out
+                adjustTicks();
                 // TODO: Reposition last datum annotations based on axis scale to prevent overlap
                 // TODO: Automatically move "now" vline regularly and relayout
                 let timestampsRange = data['timestamps_range'];
@@ -197,11 +208,12 @@ $(window).on('load', function () {
         } else if ('xaxis.range[1]' in changes) {
             rangeEnd = changes['xaxis.range[1]'];
         }
+        adjustTicks();
         if (rangeStart != null) {
             rangeStart = (new Date(rangeStart)).getTime();
             if (rangeStart < loadedFrom) {
                 if (relayoutLoadTimer !== null)
-                    window.cancelTimeout(relayoutLoadTimer);
+                    window.clearTimeout(relayoutLoadTimer);
                 relayoutLoadTimer = window.setTimeout(function () {
                     const roundingMs = 6 * 60 * 60 * 1000;
                     rangeStart = Math.floor(rangeStart / roundingMs) * roundingMs;
