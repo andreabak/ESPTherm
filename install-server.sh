@@ -32,7 +32,7 @@ create_runenv() {
   if [ ! -d "${RUNENVDIR}" ]; then
     (
       python3 -m venv "${RUNENVDIR}"
-      "${RUNENVDIR}/bin/python" -m pip install flask flask-compress plotly numpy scipy python-dateutil dataset sqlalchemy
+      "${RUNENVDIR}/bin/python" -m pip install -r server_requirements.txt
     )
     if [ ! $? ]; then
       echo "Error while setting up runtime venv, rolling back"
