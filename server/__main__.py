@@ -1,9 +1,15 @@
+#!/usr/bin/env python3
+"""Main runtime entry point module for ESPTherm server"""
+
+# pylint: disable=unused-import, relative-beyond-top-level
+
 import logging
 from argparse import ArgumentParser, Namespace
 
 from . import app
-from . import sync  # Import sync routes
-from . import ui  # Import ui routes
+# Import routes
+from . import sync
+from . import ui
 from .devices import Device
 
 
@@ -14,5 +20,5 @@ if __name__ == "__main__":
     args: Namespace = parser.parse_args()
 
     Device.load_known_devices()
-    app.logger.setLevel(logging.INFO)
+    app.logger.setLevel(logging.INFO)  # pylint: disable=no-member
     app.run(host=args.host, port=args.port)

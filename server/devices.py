@@ -1,3 +1,5 @@
+"""Devices datastructures and code"""
+
 from __future__ import annotations
 
 import json
@@ -8,8 +10,8 @@ from collections import OrderedDict
 from contextlib import contextmanager, nullcontext
 from datetime import datetime, timedelta, timezone
 from threading import RLock
-from typing import ClassVar, MutableMapping, Type, Optional, List, Tuple, Union, Any, Iterator, TypeVar, IO, Generator, \
-    Set, ContextManager, Iterable, Mapping, ForwardRef, Hashable
+from typing import (ClassVar, MutableMapping, Type, Optional, List, Tuple, Union, Any, Iterator, TypeVar, IO, Generator,
+                    Set, ContextManager, Iterable, Mapping, ForwardRef, Hashable, Generic, Sequence)
 
 import dataset
 from dataset.util import ResultIter
@@ -19,48 +21,108 @@ from dateutil.parser import parse as dateutil_parser
 
 from . import app
 from .base import LiveFileData, UniqueHashable, ensure_tz, chunked
-from .config import LOGS_PATH, LOGS_EXT, CONFIGS_PATH, CONFIGS_EXT, DEFAULT_CONFIG_BASENAME, LOGS_DB_PATH, \
-    LOGS_ROTATE_SIZE
+from .config import LOGS_PATH, LOGS_EXT, CONFIGS_PATH, CONFIGS_EXT, DEFAULT_CONFIG_BASENAME, LOGS_DB_PATH, LOGS_ROTATE_SIZE
 
 
-def iterate_type_id_paths(base_path: str) -> Iterator[Tuple[str, str]]:
-    for device_type in os.listdir(base_path):
-        device_type_dir = os.path.join(base_path, device_type)
-        if os.path.isdir(device_type_dir):
-            for filename in os.listdir(device_type_dir):
-                filepath = os.path.join(device_type_dir, filename)
-                device_id, ext = os.path.splitext(filename)
-                if os.path.isfile(filepath) and ext == LOGS_EXT:
-                    yield device_type, device_id
+__all__ = [
+    "DeviceConfig",
+    "LogRecord",
+    "DeviceLog",
+    "DeviceFullID",
+    "DeviceOptionalID",
+    "Device",
+    "ThermLogRecord",
+    "ThermDeviceLog",
+    "ThermDevice",
+    "TempStationLogRecord",
+    "TempStationDeviceLog",
+    "TempStationDevice",
+    "TempsDeviceLogRecord",
+    "TempsDeviceLog",
+    "TempsDevice"
+]
+
+
+def iterate_type_id_paths(base_path: str, ext: str) -> Iterator[Tuple[str, str]]:
+    """
+    Helper function to iterate a directory structure like `base_path/type_name/id_name.ext`
+    :param base_path: the base path to start from
+    :param ext: the file extension to filter `id_name` files by.
+                If omitted or None, disables the filtering behaviour.
+    :return: an iterator of tuples of str with (type_name, id_name)
+    """
+    type_name: str
+    for type_name in os.listdir(base_path):
+        type_dir: str = os.path.join(base_path, type_name)
+        if os.path.isdir(type_dir):
+            filename: str
+            for filename in os.listdir(type_dir):
+                filepath: str = os.path.join(type_dir, filename)
+                id_name: str
+                file_ext: str
+                id_name, file_ext = os.path.splitext(filename)
+                if os.path.isfile(filepath) and file_ext == ext:
+                    yield type_name, id_name
 
 
 class DeviceConfig(UniqueHashable, LiveFileData, dict):
+    """
+    Class that represents a device's configuration, subclasses dict
+    """
+    # pylint: disable=arguments-differ
     @classmethod
     def file_path(cls, device_type: str, device_id: Optional[str] = None) -> str:
+        """
+        Builds and returns the path of a config file for a device.
+        :param device_type: the device type
+        :param device_id: the device id. If omitted or None, the path of the default
+                          config file for the device type is returned instead.
+        :return: the file path as a string
+        """
         config_basename: str = DEFAULT_CONFIG_BASENAME if device_id is None else device_id
         config_path: str = os.path.join(CONFIGS_PATH, device_type, config_basename + CONFIGS_EXT)
         return config_path
 
     @staticmethod
-    def iterate_available_configs() -> Iterator[Tuple[str, str]]:
-        for device_type, device_id in iterate_type_id_paths(CONFIGS_PATH):
+    def iterate_available_configs() -> Iterator[Tuple[str, Optional[str]]]:
+        """
+        Iterates device type, id for all available config files
+        :return: an iterator of tuples of str, Optional[str] of (device_type, device_id)
+        """
+        device_type: str
+        device_id: Optional[str]
+        for device_type, device_id in iterate_type_id_paths(CONFIGS_PATH, ext=CONFIGS_EXT):
             if device_id == DEFAULT_CONFIG_BASENAME:
                 device_id = None
             yield device_type, device_id
 
     @classmethod
-    def device_id_config_exists(cls, device_type: str, device_id: str):
+    def device_id_config_exists(cls, device_type: str, device_id: str) -> bool:
+        """
+        Check if a config file for a specific device_type and device_id exists
+        :param device_type: the device type
+        :param device_id: the device id
+        :return: True if the config file exists, else False
+        """
         config_path: str = cls.file_path(device_type, device_id)
         return os.path.exists(config_path)
 
     @classmethod
     def from_type_id(cls, device_type: str, device_id: Optional[str] = None) -> DeviceConfig:
+        """
+        Build a `DeviceConfig` instance loading data for a device type and id
+        :param device_type: the device type
+        :param device_id: the device id.
+                          If omitted or None, the default config for the device type will be used instead.
+        :return: the built `DeviceConfig` instance
+        """
         config_path: str = cls.file_path(device_type, device_id)
         if not os.path.exists(config_path):
             raise FileNotFoundError(f'Device config file does not exist: {config_path}')
-        config_mtime: float = cls.file_mtime(config_path)
+        config_mtime: float = cls.file_mtime(path=config_path)
         config: DeviceConfig = cls(device_type=device_type, device_id=device_id,
                                    loaded_path=config_path, loaded_mtime=config_mtime)
+        fp: IO
         with open(config_path, 'r') as fp:
             config_data: MutableMapping[str, Any] = json.load(fp)
         config.update(config_data)
@@ -69,23 +131,41 @@ class DeviceConfig(UniqueHashable, LiveFileData, dict):
 
     @classmethod
     def from_device(cls, device: Device) -> DeviceConfig:
+        """
+        Build a `DeviceConfig` instance from a `Device` object, loading from the correct config file
+        :param device: the `Device` object
+        :return: the built `DeviceConfig` instance
+        """
+        device_type: str
+        device_id: Optional[str]
         device_type, device_id = device.full_device_id
         if not cls.device_id_config_exists(device_type, device_id):
             device_id = None
         return cls.from_type_id(device_type, device_id)
 
-    def __init__(self, device_type: str, device_id: str, *args, **kwargs):
+    def __init__(self, device_type: str, device_id: Optional[str], *args, **kwargs):
+        """
+        Initialization for `DeviceConfig`
+        :param device_type: the device type
+        :param device_id: the device id
+        :param args: additional positional arguments to be passed to `super().__init__(...)`
+        :param kwargs: additional keyword arguments to be passed to `super().__init__(...)`
+        """
         super().__init__(*args, **kwargs)
         self.device_type: str = device_type
-        self.device_id: str = device_id
+        self.device_id: Optional[str] = device_id
 
     @property
     def unique_id(self) -> Any:
         return (self.device_type, self.device_id), self.loaded_mtime
 
 
+# pylint: disable=invalid-name
 @dataclasses.dataclass(frozen=True)
 class LogRecord(ABC):
+    """
+    Abstract base dataclass for device log records
+    """
     DB_TYPES_MAP: ClassVar[MutableMapping[Type, TypeEngine]] = {
         int: Integer,
         str: UnicodeText,
@@ -93,21 +173,41 @@ class LogRecord(ABC):
         bool: Boolean,
         datetime: DateTime,
     }
-    DB_PKEY_FIELDS: ClassVar[Set[str]] = {'timestamp'}
-    DB_IDX_FIELDS: ClassVar[Set[str]] = {'timestamp'}
+    """Mapping from field types to SQLAlchemy column types"""
+
+    DB_PKEY_FIELDS: ClassVar[Set[str]] = {'timestamp'}  # TODO: Replace with a factory to make this better overridable?
+    """Set of field names that are primary keys columns in the database device-type's table"""
+
+    DB_IDX_FIELDS: ClassVar[Set[str]] = {'timestamp'}  # TODO: Replace with a factory to make this better overridable?
+    """Set of field names that are indexed columns in the database device-type's table"""
+
     _device_types_classes: ClassVar[MutableMapping[str, Type[LogRecord]]] = {}
 
     @staticmethod
     @abstractmethod
-    def _device_type() -> str: ...
+    def _get_device_type() -> str:  # TODO: Refactor as mixin/meta?
+        """
+        Abstract static method that subclasses must implement
+        to return the associated device type as string.
+        N.B. if two subclasses are defined with the same device type,
+             a NameError will be raised.
+        """
 
     @classmethod
     def get_known_types_classes(cls) -> Iterator[Tuple[str, Type[LogRecord]]]:
+        """
+        Iterates through all the defined `LogRecord` classes for each device type.
+        :return: an iterator of tuples of (device_type, log_record_class)
+        """
         for k, v in cls._device_types_classes.items():
             yield k, v
 
-    def __init_subclass__(cls, **kwargs):
-        device_type: str = cls._device_type()
+    def __init_subclass__(cls):  # TODO: Refactor as mixin/meta?
+        """
+        Initializes a defined `LogRecord` subclass, registering it's associated device type.
+        :raise NameError: if a subclass is being initialized with the same device type as an another one
+        """
+        device_type: str = cls._get_device_type()
         existing_device_type_class: Type[LogRecord] = cls._device_types_classes.get(device_type)
         if existing_device_type_class is not None:
             raise NameError(f'More than one {LogRecord.__name__} class with same device type "{device_type}" defined: '
@@ -115,30 +215,55 @@ class LogRecord(ABC):
         cls._device_types_classes[device_type] = cls
 
     @classmethod
-    def cls_for_device_type(cls, device_type) -> Type[LogRecord]:
+    def get_class_for_device_type(cls, device_type: str) -> Type[LogRecord]:  # TODO: Refactor as mixin/meta?
+        """
+        Gets the `LogRecord` class for the given device type.
+        :param device_type: the device type for which to get the `LogRecord` class
+        :raise NameError: if no class for the given device type is found
+        :return: the registered `LogRecord` class for the device type
+        """
         log_class: Optional[Type[LogRecord]] = cls._device_types_classes.get(device_type)
         if log_class is None:
             raise NameError(f'No log record class found for device type "{device_type}"')
         return log_class
 
     @classmethod
-    def for_type(cls, device_type: str, *args, **kwargs) -> LogRecord:
-        log_class = cls.cls_for_device_type(device_type)
+    def for_type(cls, device_type: str, *args, **kwargs) -> LogRecord:  # TODO: Refactor as mixin/meta?
+        """
+        Creates a `LogRecord` instance using the appropriate subclass for the given device type
+        :param device_type: the device type for which to instantiate the correct `LogRecord` subclass
+        :param args: additional positional arguments to be passed to the `LogRecord` subclass' `__init__(...)`
+        :param kwargs: additional keyword arguments to be passed to the `LogRecord` subclass' `__init__(...)`
+        :return: the instantiated `LogRecord` subclass' instance
+        """
+        log_class = cls.get_class_for_device_type(device_type)
         # noinspection PyArgumentList
         return log_class(*args, **kwargs)
 
     @classmethod
     @abstractmethod
     def from_raw_logline(cls, raw_line: str) -> LogRecord:
-        ...
+        """
+        Abstract class method that subclasses must implement
+        to create a `LogRecord` instance from a raw log line.
+        :param raw_line: the raw log line string
+        :return: the `LogRecord` instance created from the log line.
+        """
 
     @staticmethod
     def parse_timestamp(timestamp_raw: str, timestamp_override: Optional[datetime] = None) -> datetime:
+        """
+        Helper static method for parsing a raw timestamp string
+        :param timestamp_raw: the raw timestamp string
+        :param timestamp_override: if specified, return this directly
+        :raise ValueError: if the raw timestamp couldn't be parsed
+        :return: the parsed timestamp as a datetime object
+        """
         timestamp: datetime
         if timestamp_override is None:
             parsed_timestamp: Optional[datetime] = dateutil_parser(timestamp_raw) if timestamp_raw else None
             if not parsed_timestamp:
-                raise ValueError(f'Missing timestamp')
+                raise ValueError('Missing timestamp')
             timestamp = parsed_timestamp
         else:
             timestamp = timestamp_override
@@ -146,11 +271,17 @@ class LogRecord(ABC):
 
     @classmethod
     def fields_to_db_columns(cls) -> List[Column]:
+        """
+        Converts the fields defined in the dataclass to a list of database columns definitions.
+        :return: the list of columns
+        """
         columns: List[Column] = []
         field: dataclasses.Field
         for field in dataclasses.fields(cls):
             ftype: Any = field.type
             if isinstance(ftype, str):
+                # noinspection PyProtectedMember
+                # pylint: disable=protected-access
                 ftype = ForwardRef(ftype)._evaluate(globalns=globals(), localns=locals())
             is_union: bool = (getattr(ftype, '__origin__', None) is Union) or 'typing.Union' in repr(ftype)
             is_optional: bool = is_union and type(None) in ftype.__args__
@@ -176,45 +307,94 @@ class LogRecord(ABC):
         return columns
 
     timestamp: Optional[datetime]
+    """The timestamp as datetime of when the record was generated"""
+
     timestamp_missing: bool
+    """True if the timestamp was missing from the source log file"""
+
     wlan_active: bool
+    """True if when the log line was generated the device was in wlan mode"""
+
     battery_voltage: Optional[float]
+    """The battery voltage, if available, else None"""
 
     def copy(self, **overrides) -> LogRecord:
+        """
+        Returns a new `LogRecord` instance from the current one, applying any given values overrides
+        :param overrides: additional keyword arguments to replace values
+                          with the give ones in the copied instance
+        :return: the new `LogRecord` instance
+        """
         values: MutableMapping[str, Any] = dataclasses.asdict(self)
         values.update(overrides)
+        # noinspection PyArgumentList
         return self.__class__(**values)
 
 
 class DeviceBound(ABC):
+    """
+    Abstract mixin class that keeps a read only attribute
+    linking to a `Device` object set at initialization
+    """
     def __init__(self, device: Device, *args, **kwargs):
+        """
+        Initialization for `DeviceBound`
+        :param device: the `Device` object to link this instance to
+        :param args: additional positional arguments to be passed to `super().__init__(...)`
+        :param kwargs: additional keyword arguments to be passed to `super().__init__(...)`
+        """
         super().__init__(*args, **kwargs)
         self._device: Device = device
 
     @property
     def device(self) -> Device:
+        """The `Device` object linked to this instance"""
         return self._device
 
 
 class DeviceLog(UniqueHashable, DeviceBound, LiveFileData, list, ABC):
-    db_thread_lock: RLock = RLock()
+    """
+    Abstract base class that represents a loaded device log's data, subclasses list
+    """
+    _db_thread_lock: RLock = RLock()
 
     @staticmethod
     @abstractmethod
-    def get_logrecord_class() -> Type[LogRecord]: ...
+    def get_logrecord_class() -> Type[LogRecord]:
+        """
+        Abstract static method that subclasses must implement to return
+        the associated `LogRecord` subclass for their specific device type.
+        """
 
+    # pylint: disable=arguments-differ
     @classmethod
     def file_path(cls, device_type: str, device_id: str) -> str:
+        """
+        Builds and returns the path of a log file for a device.
+        :param device_type: the device type
+        :param device_id: the device id
+        :return: the file path as a string
+        """
         log_path: str = os.path.join(LOGS_PATH, device_type, device_id + LOGS_EXT)
         return log_path
 
     @staticmethod
     def iterate_available_logs() -> Iterator[Tuple[str, str]]:
+        """
+        Iterates device type, id for all available log files
+        :return: an iterator of tuples of str, Optional[str] of (device_type, device_id)
+        """
         # TODO: Add DB logs
-        yield from iterate_type_id_paths(LOGS_PATH)
+        yield from iterate_type_id_paths(LOGS_PATH, ext=LOGS_EXT)
 
+    # noinspection PyProtectedMember
+    # pylint: disable=protected-access
     @classmethod
-    def ensure_db_schema(cls, db: dataset.Database):
+    def ensure_db_schema(cls, db: dataset.Database) -> None:
+        """
+        Ensures the db schema exist, creating it if it doesn't.
+        :param db: the opened `dataset.Database` object
+        """
         db.query('PRAGMA journal_mode = WAL').close()
         device_type: str
         log_record_type: Type[LogRecord]
@@ -222,10 +402,8 @@ class DeviceLog(UniqueHashable, DeviceBound, LiveFileData, list, ABC):
             table_columns: List[Column] = [Column('device_id', UnicodeText, primary_key=True)] \
                                           + log_record_type.fields_to_db_columns()
             device_type_table: dataset.Table = db.create_table(device_type, primary_id=False)
-            # noinspection PyProtectedMember
             device_type_table._sync_table(table_columns)
         meta_table: dataset.Table = db.create_table('_meta', primary_id=False)
-        # noinspection PyProtectedMember
         meta_table._sync_table([
             Column('device_type', UnicodeText, nullable=False, primary_key=True),
             Column('device_id', UnicodeText, nullable=False, primary_key=True),
@@ -236,7 +414,11 @@ class DeviceLog(UniqueHashable, DeviceBound, LiveFileData, list, ABC):
     @classmethod
     @contextmanager
     def logs_db_context(cls) -> Iterator[dataset.Database]:
-        with cls.db_thread_lock:
+        """
+        Context manager function that wraps a database connection and transaction
+        :return: the opened `dataset.Database` object
+        """
+        with cls._db_thread_lock:
             db = dataset.Database(url=f'sqlite:///{LOGS_DB_PATH}',
                                   engine_kwargs=dict(connect_args=dict(check_same_thread=False)))
             cls.ensure_db_schema(db)
@@ -252,10 +434,39 @@ class DeviceLog(UniqueHashable, DeviceBound, LiveFileData, list, ABC):
                 db.close()
 
     @classmethod
+    def upload(cls, raw_data: bytes, device_type: str, device_id: str, encoding: str = 'utf8') -> str:
+        """
+        Class method to store raw data received from a device into the appropriate log file.
+        :param raw_data: the raw log data received from the device as encoded bytes
+        :param device_type: the device type
+        :param device_id: the device id
+        :param encoding: the encoding of the raw data, defaults to 'utf8'
+        :return: the decoded and log file-stored data
+        """
+        log_path: str = cls.file_path(device_type, device_id)
+        os.makedirs(os.path.dirname(log_path), exist_ok=True)
+        log_data: str = raw_data.decode(encoding)
+        if not log_data.endswith('\n'):
+            log_data += '\n'
+        with open(log_path, 'a') as fp:
+            fp.write(log_data)
+        return log_data
+
+    @classmethod  # TODO: Refactor device_type out of the method or make it static?
     def parse_records(cls, str_or_iterable: Union[str, Iterable], device_type: str, device_id: Optional[str] = None,
                       interval_avg_max_deviation: float = 0.2, ema_alpha: float = 0.25) \
             -> Generator[LogRecord, None, Tuple[Optional[float], Optional[float]]]:
-
+        """
+        Generator method for parsing raw or database-loaded log records from an iterable or multiline string.
+        :param str_or_iterable: iterable or multiline string to parse the log records from
+        :param device_type: the device type
+        :param device_id: the device id
+        :param interval_avg_max_deviation: max deviation ratio from the config-defined update/sync intervals
+                                           above which records intervals are excluded from averages calculation
+        :param ema_alpha: exponential moving average alpha-factor used to calculate intervals averages
+        :return: a generator that yields instances of the appropriate `LogRecord` subclass,
+                 and finally returns a tuple of floats or None as (average_records_interval, average_sync_interval)
+        """
         lines_iterator: Iterable[Union[str, Mapping[str, Any]]]
         if isinstance(str_or_iterable, str):
             lines_iterator = str_or_iterable.splitlines()
@@ -276,7 +487,7 @@ class DeviceLog(UniqueHashable, DeviceBound, LiveFileData, list, ABC):
         max_deviation_ratio = 1.0 + interval_avg_max_deviation
         deviation_bounds: Tuple[float, float] = ((1.0 / max_deviation_ratio), max_deviation_ratio)
 
-        log_record_cls: Type[LogRecord] = LogRecord.cls_for_device_type(device_type)
+        log_record_cls: Type[LogRecord] = LogRecord.get_class_for_device_type(device_type)
 
         last_date: Optional[datetime] = None
         last_sync: Optional[datetime] = None
@@ -293,20 +504,21 @@ class DeviceLog(UniqueHashable, DeviceBound, LiveFileData, list, ABC):
                     record = dict(record)
                     record.pop('device_id')
                     # TODO: lineno from db rowid?
+                    # noinspection PyArgumentList
                     log_record = log_record_cls(**record)
                 else:
                     raise TypeError(f'Unknown record type for log: {repr(record)}')
 
-            except Exception as exc:
+            except Exception as exc:  # pylint: disable=broad-except
                 app.logger.warning(f'Error while parsing log line {n} (skipped):\n{record}\n{exc}')
 
             else:
-                if last_date is None and log_record.timestamp_missing:
-                    raise ValueError(f'Missing log dates from the start')
                 if log_record.timestamp_missing:
+                    if last_date is None:
+                        raise ValueError('Missing log dates from the start')
                     estimated_records_interval: Optional[float] = average_records_interval or expected_sync_interval
                     if estimated_records_interval is None:
-                        raise ValueError(f'Missing log date and couldn\'t get update interval to estimate')
+                        raise ValueError('Missing log date and couldn\'t get update interval to estimate')
                     record_date: datetime = last_date + timedelta(seconds=estimated_records_interval)
                     log_record = log_record.copy(timestamp=record_date)
                 if expected_records_interval is not None and last_date is not None:
@@ -336,21 +548,18 @@ class DeviceLog(UniqueHashable, DeviceBound, LiveFileData, list, ABC):
             average_sync_interval = expected_sync_interval
         return average_records_interval, average_sync_interval
 
-    @classmethod
-    def upload(cls, raw_data: bytes, device_type: str, device_id: str, encoding: str = 'utf8') -> str:
-        log_path: str = cls.file_path(device_type, device_id)
-        os.makedirs(os.path.dirname(log_path), exist_ok=True)
-        log_data: str = raw_data.decode(encoding)
-        if not log_data.endswith('\n'):
-            log_data += '\n'
-        with open(log_path, 'a') as fp:
-            fp.write(log_data)
-        return log_data
-
-    @classmethod
-    def parse_iter(cls, iterable: Iterable[Any], device_type: str, device_id: str):
-        average_records_interval: float
-        average_sync_interval: float
+    @classmethod  # TODO: Refactor device_type out of the method or make it static?
+    def parse_iter(cls, iterable: Iterable[Any], device_type: str, device_id: str) \
+            -> Tuple[List[LogRecord], Optional[float], Optional[float]]:
+        """
+        Helper method used to parse raw or database-loaded log records from an iterable.
+        :param iterable: iterable or multiline string to parse the log records from
+        :param device_type: the device type
+        :param device_id: the device id
+        :return: a tuple with (log_records, average_records_interval, average_sync_interval)
+        """
+        average_records_interval: Optional[float]
+        average_sync_interval: Optional[float]
         log_records: List[LogRecord] = []
         records_generator: Generator[LogRecord, None, Tuple[Optional[float], Optional[float]]]
         records_generator = cls.parse_records(iterable, device_type=device_type, device_id=device_id)
@@ -364,8 +573,16 @@ class DeviceLog(UniqueHashable, DeviceBound, LiveFileData, list, ABC):
                 log_records.append(record)
         return log_records, average_records_interval, average_sync_interval
 
-    @classmethod
-    def parse_file(cls, file_path_or_fp: Union[str, IO], device_type: str, device_id: str):
+    @classmethod  # TODO: Refactor device_type out of the method or make it static?
+    def parse_file(cls, file_path_or_fp: Union[str, IO], device_type: str, device_id: str) \
+            -> Tuple[List[LogRecord], Optional[float], Optional[float]]:
+        """
+        Class method to parse records from a log file.
+        :param file_path_or_fp: a file path, or an already-opened IO file object
+        :param device_type: the device type
+        :param device_id: the device id
+        :return: a tuple with (log_records, average_records_interval, average_sync_interval)
+        """
         file_context: ContextManager[IO]
         if isinstance(file_path_or_fp, str):
             file_context = open(file_path_or_fp, 'r')
@@ -374,10 +591,20 @@ class DeviceLog(UniqueHashable, DeviceBound, LiveFileData, list, ABC):
         with file_context as fp:
             return cls.parse_iter(fp, device_type=device_type, device_id=device_id)
 
-    @classmethod
+    @classmethod  # TODO: Refactor device_type out of the method or make it static?
     def parse_db(cls, device_type: str, device_id: str,
                  timestamp_min: Optional[datetime] = None, timestamp_max: Optional[datetime] = None,
-                 bound_exclusive: Optional[bool] = None):
+                 bound_exclusive: Optional[bool] = None) \
+            -> Tuple[List[LogRecord], Optional[float], Optional[float]]:
+        """
+        Class method to load records from logs database.
+        :param device_type: the device type
+        :param device_id: the device id
+        :param timestamp_min: optional, filters records returning only ones newer than the given datetime
+        :param timestamp_max: optional, filters records returning only ones older than the given datetime
+        :param bound_exclusive: if True, the filters include the threshold value/timestamp, defaults to False
+        :return: a tuple with (log_records, average_records_interval, average_sync_interval)
+        """
         def ensure_utc_unaware(dt: datetime) -> datetime:
             return ensure_tz(dt, default_tz=None).astimezone(tz=timezone.utc).replace(tzinfo=None)
 
@@ -397,7 +624,15 @@ class DeviceLog(UniqueHashable, DeviceBound, LiveFileData, list, ABC):
             return cls.parse_iter(db_results, device_type=device_type, device_id=device_id)
 
     @classmethod
-    def reflect_to_db(cls, device_type: str, device_id: str):
+    def reflect_to_db(cls, device_type: str, device_id: str) -> None:
+        """
+        Reflects a device's log file to the logs database,
+        keeping track of the last reflected position in the log file,
+        merging duplicate records (by timestamp) keeping the newest,
+        and rotating the log file (truncating) when its size exceeds the maximum set.
+        :param device_type: the device type
+        :param device_id: the device id
+        """
         db: dataset.Database
         with cls.logs_db_context() as db:
             metadata_table: dataset.Table = db['_meta']
@@ -405,7 +640,7 @@ class DeviceLog(UniqueHashable, DeviceBound, LiveFileData, list, ABC):
             metadata = metadata_table.find_one(device_type=device_type, device_id=device_id)
 
             log_path: str = cls.file_path(device_type, device_id)
-            log_mtime: float = cls.file_mtime(log_path)
+            log_mtime: float = cls.file_mtime(path=log_path)
             if not metadata or log_mtime > metadata['log_mtime']:  # Reflect if file is newer
                 with open(log_path, 'r+') as fp:
                     log_position: int
@@ -415,8 +650,9 @@ class DeviceLog(UniqueHashable, DeviceBound, LiveFileData, list, ABC):
                     device_type_table: dataset.Table = db[device_type]
                     log_records: List[LogRecord]
                     log_records, *_ = cls.parse_file(fp, device_type=device_type, device_id=device_id)
-                    records_chunk: List[LogRecord]
+                    records_chunk: Sequence[LogRecord]
                     for records_chunk in chunked(log_records, 720):
+                        # TODO: Sanity check all records must have timestamp
                         records_by_ts: MutableMapping[datetime, LogRecord] = {ensure_tz(r.timestamp): r
                                                                               for r in records_chunk}
                         records_chunk = list(records_by_ts.values())  # Merge same-timestamp records by latest
@@ -437,11 +673,12 @@ class DeviceLog(UniqueHashable, DeviceBound, LiveFileData, list, ABC):
                         db.commit()
                     log_position = fp.tell()
                     if log_position > LOGS_ROTATE_SIZE:  # Check file rotation and truncate
+                        # TODO: Store inside a 7z archive?
                         fp.seek(0)
                         fp.truncate()
                         log_position = 0
                         fp.flush()
-                log_mtime = cls.file_mtime(log_path)
+                log_mtime = cls.file_mtime(path=log_path)
                 metadata_table.upsert(dict(
                     device_type=device_type, device_id=device_id,
                     log_position=log_position, log_mtime=log_mtime
@@ -449,12 +686,20 @@ class DeviceLog(UniqueHashable, DeviceBound, LiveFileData, list, ABC):
 
     @classmethod
     def from_device(cls, device: Device, **filters) -> DeviceLog:
+        """
+        Creates a `DeviceLog` instance from a `Device` object,
+        ensuring log database is up-to-date with the log file,
+        and loading records applying any given filters.
+        :param device: the `Device` object associated with the log
+        :param filters: additional keyword arguments passed to `.parse_db(...)` to filter the records
+        :return: the newly-created `DeviceLog` instance
+        """
         device_type, device_id = device.full_device_id
         log_path: str = cls.file_path(device_type, device_id)
         cls.reflect_to_db(device_type=device_type, device_id=device_id)
         log: DeviceLog = cls(device=device, loaded_path=log_path, load_filters=filters)
-        average_records_interval: float
-        average_sync_interval: float
+        average_records_interval: Optional[float]
+        average_sync_interval: Optional[float]
         log_records, average_records_interval, average_sync_interval = cls.parse_db(device_type=device_type,
                                                                                     device_id=device_id,
                                                                                     **filters)
@@ -466,20 +711,32 @@ class DeviceLog(UniqueHashable, DeviceBound, LiveFileData, list, ABC):
         log.freeze()
         return log
 
-    def __init__(self, average_records_interval: Optional[float] = None, average_sync_interval: Optional[float] = None,
-                 load_filters: Any = None, *args, **kwargs):
+    def __init__(self, *args, average_records_interval: Optional[float] = None,
+                 average_sync_interval: Optional[float] = None, load_filters: Any = None, **kwargs):
+        """
+        Initialization for `DeviceLog`
+        :param average_records_interval: the average interval between records,
+                                         if omitted or None, the default interval value
+                                         from the device's config is used instead
+        :param average_sync_interval: the average interval between sync records,
+                                      if omitted or None, the default interval value
+                                      from the device's config is used instead
+        :param load_filters: the filters used to load the log records in this instance, if any
+        :param args: additional positional arguments to be passed to `super().__init__(...)`
+        :param kwargs: additional keyword arguments to be passed to `super().__init__(...)`
+        """
         super().__init__(*args, **kwargs)
         if isinstance(load_filters, dict):
-            load_filters = [(k, v) for k, v in load_filters.items()]
+            load_filters = list(load_filters.items())
         if isinstance(load_filters, list):
             load_filters = tuple(load_filters)
         self._load_filters: Hashable = load_filters
         if average_records_interval is None:
             average_records_interval = self.device.config.get('update_interval')
-        self.average_records_interval: float = average_records_interval
+        self.average_records_interval: Optional[float] = average_records_interval
         if average_sync_interval is None:
             average_sync_interval = self.device.config.get('sync_interval')
-        self.average_sync_interval: float = average_sync_interval
+        self.average_sync_interval: Optional[float] = average_sync_interval
 
     @property
     def unique_id(self) -> Any:
@@ -487,10 +744,12 @@ class DeviceLog(UniqueHashable, DeviceBound, LiveFileData, list, ABC):
 
     @property
     def device_type(self) -> str:
+        """Shortcut property for the device type of the associated `Device` object"""
         return self.device.device_type
 
     @property
     def device_id(self) -> str:
+        """Shortcut property for the device id of the associated `Device` object"""
         return self.device.device_id
 
     # TODO: Override uptodate with if check for mode
@@ -499,28 +758,49 @@ class DeviceLog(UniqueHashable, DeviceBound, LiveFileData, list, ABC):
 
 DeviceFullID = Tuple[str, str]
 DeviceOptionalID = Tuple[str, Optional[str]]
-_CT = TypeVar('_CT', bound=DeviceConfig)
-_LT = TypeVar('_LT', bound=DeviceLog)
+CT = TypeVar('CT', bound=DeviceConfig)
+LT = TypeVar('LT', bound=DeviceLog)
 
 
-class Device(ABC):
+# noinspection SyntaxError
+class Device(ABC, Generic[CT, LT]):
+    """
+    Abstract base class that represents a device and its related data
+    """
     _device_types_classes: ClassVar[MutableMapping[str, Type[Device]]] = {}
     _known_devices: ClassVar[MutableMapping[DeviceFullID, Device]] = {}
-    _cached_configs: ClassVar[MutableMapping[DeviceOptionalID, _CT]] = {}
+    _cached_configs: ClassVar[MutableMapping[DeviceOptionalID, CT]] = {}
 
     @staticmethod
     @abstractmethod
-    def _get_device_type() -> str: ...
+    def _get_device_type() -> str:  # TODO: Refactor as mixin/meta?
+        """
+        Abstract static method that subclasses must implement
+        to return the associated device type as string.
+        N.B. if two subclasses are defined with the same device type,
+             a NameError will be raised.
+        """
 
     @staticmethod
-    def _get_config_class() -> Type[_CT]:
+    def _get_config_class() -> Type[DeviceConfig]:
+        """
+        Static method that returns the class used as `DeviceConfig`.
+        """
         return DeviceConfig
 
     @staticmethod
     @abstractmethod
-    def _get_log_class() -> Type[_LT]: ...
+    def _get_log_class() -> Type[DeviceLog]:
+        """
+        Abstract static method that subclasses must implement to return
+        the associated `DeviceLog` subclass for their specific device type.
+        """
 
-    def __init_subclass__(cls, **kwargs):
+    def __init_subclass__(cls, **kwargs):  # TODO: Refactor as mixin/meta?
+        """
+        Initializes a defined `Device` subclass, registering it's associated device type.
+        :raise NameError: if a subclass is being initialized with the same device type as an another one
+        """
         device_type: str = cls._get_device_type()
         existing_device_type_class: Type[Device] = cls._device_types_classes.get(device_type)
         if existing_device_type_class is not None:
@@ -529,19 +809,37 @@ class Device(ABC):
         cls._device_types_classes[device_type] = cls
 
     @classmethod
-    def get_class_for_device_type(cls, device_type) -> Type[Device]:
+    def get_class_for_device_type(cls, device_type) -> Type[Device]:  # TODO: Refactor as mixin/meta?
+        """
+        Gets the `Device` class for the given device type.
+        :param device_type: the device type for which to get the `Device` class
+        :raise NameError: if no class for the given device type is found
+        :return: the registered `Device` class for the device type
+        """
         device_type_cls: Optional[Type[Device]] = cls._device_types_classes.get(device_type)
         if device_type_cls is None:
             raise KeyError(f'No {Device.__name__} subclass found for device type "{device_type}"')
         return device_type_cls
 
     @classmethod
-    def for_type(cls, device_type: str, *args, **kwargs) -> Device:
+    def for_type(cls, device_type: str, *args, **kwargs) -> Device:  # TODO: Refactor as mixin/meta?
+        """
+        Creates a `Device` instance using the appropriate subclass for the given device type
+        :param device_type: the device type for which to instantiate the correct `Device` subclass
+        :param args: additional positional arguments to be passed to the `Device` subclass' `__init__(...)`
+        :param kwargs: additional keyword arguments to be passed to the `Device` subclass' `__init__(...)`
+        :return: the instantiated `Device` subclass' instance
+        """
         device_cls = cls.get_class_for_device_type(device_type)
         return device_cls(*args, **kwargs)
 
     @classmethod
-    def _register_instance(cls, instance: Device):
+    def _register_instance(cls, instance: Device) -> None:
+        """
+        Internal class method that registers an instantiated `Device` object as a known device
+        with its full id, ensuring there are no conflicts.
+        :param instance: the instantiated `Device` instance
+        """
         instance_full_id: DeviceFullID = instance.full_device_id
         conflicting_device: Optional[Device] = cls._known_devices.get(instance_full_id)
         if conflicting_device is not None:
@@ -551,47 +849,69 @@ class Device(ABC):
 
     @classmethod
     def iterate_known_devices(cls) -> Iterator[Device]:
+        """
+        Iterates all known devices.
+        :return: an iterator of `Device` objects
+        """
         for device in cls._known_devices.values():
             yield device
 
     @classmethod
     def get_known_device(cls, device_type: str, device_id: str) -> Device:
+        """
+        Get a known device by type and id.
+        :param device_type: the device type
+        :param device_id: the device id
+        :raise KeyError: if there's no known device with the given type and id
+        :return: the known `Device` object
+        """
         return cls._known_devices[(device_type, device_id)]
 
     @classmethod
-    def load_logged_devices(cls):
+    def load_logged_devices(cls) -> None:
+        """Preloads all known devices from available log files."""
         for device_type, device_id in DeviceLog.iterate_available_logs():
             cls.for_type(device_type=device_type, device_id=device_id, preload=True)
 
     @classmethod
-    def get_config(cls, device_type: str, device_id: Optional[str]):
+    def get_config(cls, device_type: str, device_id: Optional[str]) -> CT:
+        """
+        Class method to get a config for the specified device type and id.
+        Configs are internally cached and kept up-to-date.
+        :param device_type: the device type
+        :param device_id: the device id
+        :return: the device config object
+        """
         if not DeviceConfig.device_id_config_exists(device_type, device_id):
             device_id = None
         full_id = device_type, device_id
-        cached_config: Optional[_CT] = cls._cached_configs.get(full_id)
+        cached_config: Optional[CT] = cls._cached_configs.get(full_id)
         if cached_config is None or not cached_config.uptodate:
             cls._cached_configs[full_id] = DeviceConfig.from_type_id(device_type, device_id)
         return cls._cached_configs[full_id]
 
     @classmethod
-    def load_known_configs(cls):
+    def load_known_configs(cls) -> None:
+        """Preloads all known device configs, caching them."""
         for device_type, device_id in DeviceConfig.iterate_available_configs():
             cls.get_config(device_type, device_id)
 
     @classmethod
     def load_known_devices(cls):
+        """Preloads all known devices and their configs."""
         cls.load_known_configs()
         cls.load_logged_devices()
 
     def __init__(self, device_id: str, preload: bool = False):
+        """
+        Initialization for `Device`
+        :param device_id: the device id
+        :param preload: if True, preloads device's config and log data. Defaults to False
+        """
         self._device_id: str = device_id
-        self._config: Optional[_CT] = None
+        self._config: Optional[CT] = None
 
-        conflicting_device: Optional[Device] = self.__class__._known_devices.get(self.full_device_id)
-        if conflicting_device is not None:
-            raise ValueError(f'Instantiating new device {repr(self)} with same full id "{self.full_device_id}" '
-                             f'as already existing instance {repr(conflicting_device)}')
-        self.__class__._known_devices[self.full_device_id] = self
+        self.__class__._register_instance(self)
 
         if preload:
             self._load_config()
@@ -599,34 +919,48 @@ class Device(ABC):
 
     @property
     def device_type(self) -> str:
-        return self.__class__._get_device_type()
+        """The device type of this instance."""
+        return self._get_device_type()
 
     @property
     def device_id(self) -> str:
+        """The device id of this instance."""
         return self._device_id
 
     @property
     def full_device_id(self) -> DeviceFullID:
+        """The complete device id as a tuple of (device_type, device_id)."""
         return self.device_type, self._device_id
 
-    def _load_config(self):
+    def _load_config(self) -> None:
+        """Internal method that loads the device's config into the instance."""
         self._config = self.get_config(self.device_type, self.device_id)
 
     @property
-    def config(self) -> _CT:
+    def config(self) -> CT:
+        """The device's config"""
         if self._config is None or not self._config.uptodate:
             self._load_config()
         return self._config
 
-    def get_log(self, **filters) -> _LT:
-        return self._get_log_class().from_device(self, **filters)
+    def get_log(self, **filters) -> LT:
+        """
+        Gets a device log, applying any specified loading filters
+        :param filters: additional keyword arguments passed to the log class to filter the records
+        :return: the loaded device log
+        """
+        # noinspection PyUnresolvedReferences,SyntaxError,Annotator
+        return self._get_log_class().from_device(self, **filters)  # type: ignore[return-value]
 
     @property
-    def full_log(self) -> _LT:
+    def full_log(self) -> LT:
+        """The full log of the device, with all the existing records.
+        N.B. This might take a long time to load."""
         return self.get_log()
 
     @property
-    def log_daily(self) -> _LT:
+    def log_daily(self) -> LT:
+        """The device log of only the last 24 hours"""
         # TODO: UTC conversion? Check
         # Rounding to hour to allow caching
         daily_min_dt: datetime = (datetime.now() - timedelta(hours=24)).replace(minute=0, second=0, microsecond=0)
@@ -634,22 +968,41 @@ class Device(ABC):
 
 
 @dataclasses.dataclass(frozen=True)
-class TempsDeviceLogRecordMixin:
+class TempsDeviceLogRecord:
+    """
+    Dataclass mixin for LogRecords that store temperatures
+    """
     temp_current: Optional[float]
+    """The current raw unfiltered temperature value"""
+
     temp_average: Optional[float]
+    """The averaged temperature value, as per device's config"""
 
 
 @dataclasses.dataclass(frozen=True)
-class ThermLogRecord(TempsDeviceLogRecordMixin, LogRecord):
+class ThermLogRecord(TempsDeviceLogRecord, LogRecord):
+    """
+    `LogRecord` subclass for "therm" device types
+    """
     @staticmethod
-    def _device_type() -> str:
+    def _get_device_type() -> str:
         return 'therm'
 
     operating_mode: str
+    """Operating mode of the therm device at log record time"""
+
     temp_set: Optional[float]
+    """The set threshold temperature for the device at log record time,
+    usually derived from the configured schedule"""
+
     therm_state: bool
+    """The thermostat switch state at log record time"""
+
     tampered: bool
+    """Whether the tamper switch has been detected"""
+
     grace_given: bool
+    """Whether the thermostat is operating in "grace" mode (obsolete)"""
 
     @classmethod
     def from_raw_logline(cls, raw_line: str) -> LogRecord:
@@ -681,17 +1034,29 @@ class ThermLogRecord(TempsDeviceLogRecordMixin, LogRecord):
 
 
 class ThermDeviceLog(DeviceLog):
+    """
+    `DeviceLog` subclass for "therm" device types
+    """
     @staticmethod
     @abstractmethod
     def get_logrecord_class() -> Type[LogRecord]:
         return ThermLogRecord
 
     @staticmethod
-    def get_sched_temps(config: MutableMapping[str, Any]) -> List[float]:
+    def get_sched_temps(config: Mapping[str, Any]) -> List[float]:  # TODO: Refactor into a temps_set mixin
+        """
+        Helper static method to get the schedule temperatures from a given device config dict.
+        :param config: a mapping-like object (config or dict)
+        :return: the list of hourly scheduled temperatures
+        """
         return config['thermostat']['sched_temps']
 
 
-class ThermDevice(Device):
+# pylint: disable=missing-function-docstring,unsubscriptable-object
+class ThermDevice(Device[DeviceConfig, ThermDeviceLog]):
+    """
+    `Device` subclass for "therm" device types
+    """
     @staticmethod
     def _get_device_type() -> str:
         return 'therm'
@@ -702,14 +1067,23 @@ class ThermDevice(Device):
 
 
 @dataclasses.dataclass(frozen=True)
-class TempStationLogRecord(TempsDeviceLogRecordMixin, LogRecord):
+class TempStationLogRecord(TempsDeviceLogRecord, LogRecord):
+    """
+    `LogRecord` subclass for "tempstation" device types
+    """
     @staticmethod
-    def _device_type() -> str:
+    def _get_device_type() -> str:
         return 'tempstation'
 
     humidity_current: Optional[float]
+    """The current raw unfiltered temperature value"""
+
     humidity_average: Optional[float]
+    """The averaged temperature value, as per device's config"""
+
     temp_set: Optional[float]
+    """The set threshold temperature for the device at log record time,
+    usually derived from the configured schedule"""
 
     @classmethod
     def from_raw_logline(cls, raw_line: str) -> LogRecord:
@@ -729,17 +1103,29 @@ class TempStationLogRecord(TempsDeviceLogRecordMixin, LogRecord):
 
 
 class TempStationDeviceLog(DeviceLog):
+    """
+    `DeviceLog` subclass for "tempstation" device types
+    """
     @staticmethod
     @abstractmethod
     def get_logrecord_class() -> Type[LogRecord]:
         return TempStationLogRecord
 
     @staticmethod
-    def get_sched_temps(config: MutableMapping[str, Any]) -> List[float]:
+    def get_sched_temps(config: MutableMapping[str, Any]) -> List[float]:  # TODO: Refactor into a temps_set mixin
+        """
+        Helper static method to get the schedule temperatures from a given device config dict.
+        :param config: a mapping-like object (config or dict)
+        :return: the list of hourly scheduled temperatures
+        """
         return config['station']['sched_temps']
 
 
-class TempStationDevice(Device):
+# pylint: disable=missing-function-docstring,unsubscriptable-object
+class TempStationDevice(Device[DeviceConfig, TempStationDeviceLog]):
+    """
+    `Device` subclass for "tempstation" device types
+    """
     @staticmethod
     def _get_device_type() -> str:
         return 'tempstation'

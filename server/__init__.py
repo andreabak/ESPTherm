@@ -1,7 +1,12 @@
+"""ESPTherm server package"""
+
 from flask import Flask
 from flask_compress import Compress
 
 from .config import ServerConfig
+
+
+__all__ = ["app", "compress"]
 
 
 app: Flask = Flask(__name__)

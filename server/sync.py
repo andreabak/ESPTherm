@@ -1,3 +1,5 @@
+"""Module with server routes used by devices for synchronization and data upload"""
+
 from calendar import timegm
 from datetime import datetime, timedelta
 from typing import Optional, Dict, MutableMapping, Any, Sequence
@@ -11,8 +13,17 @@ from .devices import DeviceLog, Device, DeviceConfig, LogRecord
 
 @app.route('/<string:device_type>/upload_log', methods=['POST'])
 def upload_log(device_type: str, device_id: Optional[str] = None) -> str:
+    """
+    Route for log data upload by a device.
+    The route endpoint is `/<string:device_type>/upload_log?deviceid=<device_id>`,
+    the request method must be POST, and the request's data must be the log data being uploaded.
+    :param device_type: the device type
+    :param device_id: the device id, optionally specified by another caller method,
+                      otherwise derived from url params.
+    :return: the response for the device, a string of the length of the received raw data
+    """
     if not device_id:
-        device_id: Optional[str] = request.args.get('deviceid')
+        device_id = request.args.get('deviceid')
     if not device_id:
         abort(400)
     raw_data: bytes = request.data
@@ -31,12 +42,22 @@ def upload_log(device_type: str, device_id: Optional[str] = None) -> str:
     return str(len(raw_data))
 
 
-# Embedded to unix epoch delta
 NTP_DELTA: int = timegm((2000, 1, 1, 0, 0, 0, 5, 1, 0))
+"""Micropython embedded-to-unix epoch seconds delta"""
 
 
 @app.route('/<string:device_type>/sync_config')
 def sync_config(device_type: str) -> Response:
+    """
+    Route for config synchronization by a device.
+    The route endpoint is `/<string:device_type>/sync_config`.
+    Optional url parameters are:
+    - `deviceid`: the device id, if omitted the default config for the device type is used
+    - `only_timestamp`: sends only the timestamp of the local (server's) config file
+                        instead of all the config's data
+    :param device_type: the device type
+    :return: the response for the device, json data with an object with the config's mtime and (optionally) its data
+    """
     only_timestamp: bool = 'only_timestamp' in request.args
     device_id: Optional[str] = request.args.get('deviceid')
 
@@ -61,6 +82,15 @@ class RemoteThermDisabled(RemoteThermException):
 
 @app.route('/<string:device_type>/state_set')
 def state_set(device_type: str) -> Response:
+    """
+    Route for state synchronization by a device.
+    Can be used to remotely set states to a device (like thermostat switching)
+    The route endpoint is `/<string:device_type>/state_set`.
+    Optional url parameters are:
+    - `deviceid`: the device id, if omitted some remote state settings might not be applied
+    :param device_type: the device type
+    :return: the response for the device, json data with an object of state values overrides or empty
+    """
     device_id: Optional[str] = request.args.get('deviceid')
 
     data: Dict = {}
@@ -68,6 +98,7 @@ def state_set(device_type: str) -> Response:
     # Check remote therm switch linking
     if device_type == 'therm':
         try:
+            # pylint: disable=no-member  # pylint issue #3684
             remote_therm_cfg: MutableMapping[str, Any] = server_config.get('remote_therm')
             if not remote_therm_cfg:
                 raise RemoteThermDisabled
