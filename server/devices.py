@@ -454,6 +454,7 @@ class DeviceLog(UniqueHashable, DeviceBound, LiveFileData, list, ABC):
 
     @classmethod  # TODO: Refactor device_type out of the method or make it static?
     def parse_records(cls, str_or_iterable: Union[str, Iterable], device_type: str, device_id: Optional[str] = None,
+                      last_known_date: Optional[datetime] = None,
                       interval_avg_max_deviation: float = 0.2, ema_alpha: float = 0.25) \
             -> Generator[LogRecord, None, Tuple[Optional[float], Optional[float]]]:
         """
@@ -461,6 +462,7 @@ class DeviceLog(UniqueHashable, DeviceBound, LiveFileData, list, ABC):
         :param str_or_iterable: iterable or multiline string to parse the log records from
         :param device_type: the device type
         :param device_id: the device id
+        :param last_known_date: the timestamp of the last record before the first that will be parsed, if known
         :param interval_avg_max_deviation: max deviation ratio from the config-defined update/sync intervals
                                            above which records intervals are excluded from averages calculation
         :param ema_alpha: exponential moving average alpha-factor used to calculate intervals averages
@@ -489,7 +491,7 @@ class DeviceLog(UniqueHashable, DeviceBound, LiveFileData, list, ABC):
 
         log_record_cls: Type[LogRecord] = LogRecord.get_class_for_device_type(device_type)
 
-        last_date: Optional[datetime] = None
+        last_date: Optional[datetime] = last_known_date
         last_sync: Optional[datetime] = None
 
         for n, record in enumerate(lines_iterator):
@@ -549,20 +551,21 @@ class DeviceLog(UniqueHashable, DeviceBound, LiveFileData, list, ABC):
         return average_records_interval, average_sync_interval
 
     @classmethod  # TODO: Refactor device_type out of the method or make it static?
-    def parse_iter(cls, iterable: Iterable[Any], device_type: str, device_id: str) \
+    def parse_iter(cls, iterable: Iterable[Any], device_type: str, device_id: str, **parser_kwargs) \
             -> Tuple[List[LogRecord], Optional[float], Optional[float]]:
         """
         Helper method used to parse raw or database-loaded log records from an iterable.
         :param iterable: iterable or multiline string to parse the log records from
         :param device_type: the device type
         :param device_id: the device id
+        :param parser_kwargs: additional keyword arguments for log lines parser
         :return: a tuple with (log_records, average_records_interval, average_sync_interval)
         """
         average_records_interval: Optional[float]
         average_sync_interval: Optional[float]
         log_records: List[LogRecord] = []
         records_generator: Generator[LogRecord, None, Tuple[Optional[float], Optional[float]]]
-        records_generator = cls.parse_records(iterable, device_type=device_type, device_id=device_id)
+        records_generator = cls.parse_records(iterable, device_type=device_type, device_id=device_id, **parser_kwargs)
         while True:
             try:
                 record: LogRecord = next(records_generator)
@@ -574,13 +577,14 @@ class DeviceLog(UniqueHashable, DeviceBound, LiveFileData, list, ABC):
         return log_records, average_records_interval, average_sync_interval
 
     @classmethod  # TODO: Refactor device_type out of the method or make it static?
-    def parse_file(cls, file_path_or_fp: Union[str, IO], device_type: str, device_id: str) \
+    def parse_file(cls, file_path_or_fp: Union[str, IO], device_type: str, device_id: str, **parser_kwargs) \
             -> Tuple[List[LogRecord], Optional[float], Optional[float]]:
         """
         Class method to parse records from a log file.
         :param file_path_or_fp: a file path, or an already-opened IO file object
         :param device_type: the device type
         :param device_id: the device id
+        :param parser_kwargs: additional keyword arguments for log lines parser
         :return: a tuple with (log_records, average_records_interval, average_sync_interval)
         """
         file_context: ContextManager[IO]
@@ -589,12 +593,12 @@ class DeviceLog(UniqueHashable, DeviceBound, LiveFileData, list, ABC):
         else:
             file_context = nullcontext(file_path_or_fp)
         with file_context as fp:
-            return cls.parse_iter(fp, device_type=device_type, device_id=device_id)
+            return cls.parse_iter(fp, device_type=device_type, device_id=device_id, **parser_kwargs)
 
     @classmethod  # TODO: Refactor device_type out of the method or make it static?
     def parse_db(cls, device_type: str, device_id: str,
                  timestamp_min: Optional[datetime] = None, timestamp_max: Optional[datetime] = None,
-                 bound_exclusive: Optional[bool] = None) \
+                 bound_exclusive: Optional[bool] = None, **parser_kwargs) \
             -> Tuple[List[LogRecord], Optional[float], Optional[float]]:
         """
         Class method to load records from logs database.
@@ -603,6 +607,7 @@ class DeviceLog(UniqueHashable, DeviceBound, LiveFileData, list, ABC):
         :param timestamp_min: optional, filters records returning only ones newer than the given datetime
         :param timestamp_max: optional, filters records returning only ones older than the given datetime
         :param bound_exclusive: if True, the filters include the threshold value/timestamp, defaults to False
+        :param parser_kwargs: additional keyword arguments for log lines parser
         :return: a tuple with (log_records, average_records_interval, average_sync_interval)
         """
         def ensure_utc_unaware(dt: datetime) -> datetime:
@@ -621,7 +626,7 @@ class DeviceLog(UniqueHashable, DeviceBound, LiveFileData, list, ABC):
             if timestamp_filter:
                 filters['timestamp'] = timestamp_filter
             db_results: ResultIter = device_type_table.find(device_id=device_id, **filters, order_by='timestamp')
-            return cls.parse_iter(db_results, device_type=device_type, device_id=device_id)
+            return cls.parse_iter(db_results, device_type=device_type, device_id=device_id, **parser_kwargs)
 
     @classmethod
     def reflect_to_db(cls, device_type: str, device_id: str) -> None:
@@ -648,8 +653,13 @@ class DeviceLog(UniqueHashable, DeviceBound, LiveFileData, list, ABC):
                         log_position = metadata['log_position'] or 0
                         fp.seek(log_position)
                     device_type_table: dataset.Table = db[device_type]
+                    last_db_record: Optional[MutableMapping[str, Any]]
+                    last_db_record = device_type_table.find_one(device_id=device_id, order_by='-timestamp')
+                    last_record_datetime: Optional[datetime]
+                    last_record_datetime = ensure_tz(last_db_record['timestamp']) if last_db_record else None
                     log_records: List[LogRecord]
-                    log_records, *_ = cls.parse_file(fp, device_type=device_type, device_id=device_id)
+                    log_records, *_ = cls.parse_file(fp, device_type=device_type, device_id=device_id,
+                                                     last_known_date=last_record_datetime)
                     records_chunk: Sequence[LogRecord]
                     for records_chunk in chunked(log_records, 720):
                         # TODO: Sanity check all records must have timestamp
