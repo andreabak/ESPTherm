@@ -1,12 +1,18 @@
+"""Module with server routes for web UI"""
+
 import json
 import math
 import os
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from functools import wraps
+from functools import wraps, partial
 from inspect import signature, Parameter
-from typing import List, MutableMapping, Optional, Tuple, Any, Callable, Iterator, Union, Sequence
+from typing import List, MutableMapping, Optional, Tuple, Any, Callable, Iterator, Union, Sequence, TypeVar
+try:
+    from typing import Protocol
+except ImportError:
+    from typing_extensions import Protocol
 
 import numpy as np
 import plotly
@@ -24,8 +30,10 @@ from .base import ensure_tz
 from .devices.base import DeviceConfig, DeviceLog, Device
 from .devices import TempsDeviceLog, ThermDeviceLog, TempStationDeviceLog
 
-SESSION_COOKIE_NAME: str = 'flasksession'
 
+# TODO: Docstrings
+
+SESSION_COOKIE_NAME: str = 'flasksession'
 MAIN_DEVICE: Tuple[str, str] = ('therm', 'main')
 
 
@@ -41,7 +49,7 @@ def get_session_cookie() -> Optional[str]:
     return request.cookies.get(SESSION_COOKIE_NAME)
 
 
-def check_session_valid() -> bool:
+def check_session_valid() -> bool:  # TODO: Create anon sessions too so we can rate-limit pin attempts
     global authed_sessions
     cookie_id: Optional[str] = get_session_cookie()
     if not cookie_id or cookie_id not in authed_sessions:
@@ -80,6 +88,7 @@ def auth_page() -> Response:
     return render_template('pinpad.jinja2')
 
 
+# pylint: disable=invalid-name
 def format_time(seconds: float, precision: int = 2, with_seconds: bool = True, with_letters: bool = True) -> str:
     """
     Format a duration in seconds into a timer-like string
@@ -128,11 +137,11 @@ plot_figures_cache = {}
 
 def plot_figures_cache_cleanup():
     # Cleanup cache
-    k: Tuple
-    pf: CachedPlotFigure
-    for k, pf in list(plot_figures_cache.items()):
-        if not pf.log.uptodate:
-            del plot_figures_cache[k]
+    key: Tuple
+    cached_plot_figure: CachedPlotFigure
+    for key, cached_plot_figure in list(plot_figures_cache.items()):
+        if not cached_plot_figure.log.uptodate:
+            del plot_figures_cache[key]
 
 
 def log_cacheable(plot_fn: Callable[..., PlotFnResult]) -> Callable[..., PlotFnResult]:
@@ -148,6 +157,7 @@ def log_cacheable(plot_fn: Callable[..., PlotFnResult]) -> Callable[..., PlotFnR
             if param.default != Parameter.empty:
                 raise AttributeError(f'"{kwarg}" parameter must not have any default value')
         except AttributeError as exc:
+            # pylint: disable=raise-missing-from
             raise AttributeError(f'plot function {repr(plot_fn)} decorated with "log_cacheable" {exc}.\n'
                                  f'Got signature: {fn_sig}')
 
@@ -202,9 +212,35 @@ def make_np_array(*, log: DeviceLog, field_name: str, cast: Optional[Callable] =
     return values, mask
 
 
+# pylint: disable=unused-argument  # log kwarg needed by caching decorator
 @log_cacheable
 def make_masked_arrays(*arrays: np.ndarray, mask: np.ndarray, log: DeviceLog) -> Sequence[np.ndarray]:
     return tuple(a[mask] for a in arrays)
+
+
+@log_cacheable
+def mktrace_main(*, log: DeviceLog, timeaxis: np.ndarray, field_name: str, data_name: str, yaxis: str,
+                 hue: float, line_dash: str = 'solid', opacity: float = 1.0) \
+        -> Tuple[Optional[BaseTraceType], np.ndarray, np.ndarray, Tuple[float, float]]:
+    values: np.ndarray
+    mask: np.ndarray
+    values, mask = make_np_array(log=log, field_name=field_name)
+    timeaxis_masked: np.ndarray
+    values_masked: np.ndarray
+    timeaxis_masked, values_masked = make_masked_arrays(timeaxis, values, mask=mask, log=log)
+    trace: Optional[BaseTraceType]
+    if mask.size:
+        trace = plotly_go.Scatter(
+            x=timeaxis_masked, y=values_masked, yaxis=yaxis,
+            name=f'{log.device_id} {data_name}',
+            meta=dict(id=f'{log_device_full_id(log)}.{data_name}_main'),
+            legendgroup=log_device_full_id(log),
+            line=dict(shape='spline', width=2, color=f'hsla({hue:.0f}, 100%, 55%, 0.75)', dash=line_dash),
+            opacity=opacity
+        )
+    else:
+        trace = None
+    return trace, values_masked, timeaxis_masked, get_percentile_range(values_masked)
 
 
 @log_cacheable
@@ -221,7 +257,7 @@ def mktrace_temps_avg(*, log: TempsDeviceLog, timeaxis: np.ndarray, hue: float =
             name=f'{log.device_id} temp',
             meta=dict(id=f'{log_device_full_id(log)}.temp_avg'),
             legendgroup=log_device_full_id(log),
-            line=dict(shape='spline', width=2, color=f'hsla({hue:.0f}, 100%, 75%, 0.75)', dash=line_dash),
+            line=dict(shape='spline', width=2, color=f'hsla({hue:.0f}, 100%, 55%, 0.75)', dash=line_dash),
             opacity=opacity
         )
     else:
@@ -243,7 +279,7 @@ def mktrace_rhs_avg(*, log: TempStationDeviceLog, timeaxis: np.ndarray, hue: flo
             name=f'{log.device_id} rh',
             meta=dict(id=f'{log_device_full_id(log)}.rh_avg'),
             legendgroup=log_device_full_id(log),
-            line=dict(shape='spline', width=2, color=f'hsla({hue:.0f}, 100%, 75%, 0.75)', dash=line_dash),
+            line=dict(shape='spline', width=2, color=f'hsla({hue:.0f}, 100%, 55%, 0.75)', dash=line_dash),
             opacity=opacity
         )
     else:
@@ -252,21 +288,21 @@ def mktrace_rhs_avg(*, log: TempStationDeviceLog, timeaxis: np.ndarray, hue: flo
 
 
 @log_cacheable
-def mktrace_houravg(*, log: TempsDeviceLog, values: np.ndarray, timeaxis: np.ndarray,
+def mktrace_long_avg(*, log: TempsDeviceLog, values: np.ndarray, timeaxis: np.ndarray,
                     data_name: str, yaxis: str = 'y2', hue: float = 210, line_dash: str = 'solid',
-                    opacity: float = 1.0) \
+                    opacity: float = 1.0, samples: int = 59) \
         -> Tuple[BaseTraceType, np.ndarray, Tuple[float, float]]:
-    filter_size: int = min(max(0, math.ceil(values.size / 2) * 2 - 1), 59)
-    values_houravg: np.ndarray = savgol_filter(values, filter_size, 4)
+    filter_size: int = min(max(0, math.ceil(values.size / 2) * 2 - 1), samples)
+    values_long_avg: np.ndarray = savgol_filter(values, filter_size, 4)
     trace = plotly_go.Scatter(
-        x=timeaxis, y=values_houravg, yaxis=yaxis,
-        name=f'{log.device_id} {data_name} hour',
-        meta=dict(id=f'{log_device_full_id(log)}.{data_name}.hour_avg'),
+        x=timeaxis, y=values_long_avg, yaxis=yaxis,
+        name=f'{log.device_id} {data_name} longavg',
+        meta=dict(id=f'{log_device_full_id(log)}.{data_name}.long_avg'),
         legendgroup=log_device_full_id(log), showlegend=False, hoverinfo='skip',
-        line=dict(shape='spline', width=7, color=f'hsla({hue:.0f}, 100%, 50%, 0.5)', dash=line_dash),
+        line=dict(shape='spline', width=7, color=f'hsla({hue:.0f}, 100%, 35%, 0.45)', dash=line_dash),
         opacity=opacity
     )
-    return trace, values_houravg, get_percentile_range(values_houravg)
+    return trace, values_long_avg, get_percentile_range(values_long_avg)
 
 
 @log_cacheable
@@ -313,7 +349,7 @@ def mktrace_peaks_valleys(*, log: TempsDeviceLog, values: np.ndarray, timeaxis: 
 
 
 @log_cacheable
-def mktrace_temps_set(*, log: ThermDeviceLog, timeaxis: np.ndarray, values: Optional[np.ndarray] = None,
+def mktrace_temps_set(*, log: TempsDeviceLog, timeaxis: np.ndarray, values: Optional[np.ndarray] = None,
                       name_postfix: Optional[str] = None,
                       hue: float = 210, showlegend: bool = True, line_dash: str = 'solid', opacity: float = 1.0) \
         -> Tuple[BaseTraceType, np.ndarray, np.ndarray, Tuple[float, float]]:
@@ -352,9 +388,9 @@ def mktrace_bat_voltage(*, log: DeviceLog, timeaxis: np.ndarray, hue: float = 21
     bat_voltage_smooth: np.ndarray
     if bat_voltage_mask.size:
         bat_voltage_smooth = bat_voltage_masked
-        bat_voltage_smooth = savgol_filter(bat_voltage_smooth, 9, 3, mode='mirror')
-        bat_voltage_smooth = median_filter(bat_voltage_smooth, 19, mode='mirror')
-        bat_voltage_smooth = gaussian_filter1d(bat_voltage_smooth, 10, mode='mirror')
+        bat_voltage_smooth = savgol_filter(bat_voltage_smooth, 9, 3)
+        bat_voltage_smooth = median_filter(bat_voltage_smooth, 19)
+        bat_voltage_smooth = gaussian_filter1d(bat_voltage_smooth, 10)
         trace = plotly_go.Scatter(
             x=timeaxis_masked, y=bat_voltage_smooth, yaxis='y4',
             name=f'{log.device_id} vcc',
@@ -415,7 +451,7 @@ def mktrace_switch_times(*, log: ThermDeviceLog, timeaxis: np.ndarray, hue: floa
 def mktrace_missing_data(*, log: DeviceLog, timeaxis: np.ndarray, interval_threshold: float = 2.0,
                          hue: float = 210, opacity: float = 1.0) \
         -> BaseTraceType:
-    timestamps_intervals: np.ndarray = np.array([td.total_seconds() for td in (timeaxis[1:] - timeaxis[:-1])])
+    timestamps_intervals: np.ndarray = np.array([td.total_seconds() for td in timeaxis[1:] - timeaxis[:-1]])
     missing_data_starts: np.ndarray = np.where(timestamps_intervals > interval_threshold)[0]
     texts: List[str] = [f'{log.device_id}: no data for {format_time(timestamps_intervals[s], with_seconds=False)}<br>'
                         f'(from {timeaxis[s].strftime("%H:%M")} to {timeaxis[s+1].strftime("%H:%M")})'
@@ -463,10 +499,199 @@ def add_timed_annotation(fig: plotly_go.Figure, value: float, timestamp: datetim
     )
 
 
+RangedType = Union[float, datetime]
+RangeSpanType = Union[float, timedelta]
+
+
+def compute_axis_range(minmaxrange: List[Tuple[RangedType, RangedType]], pad: Optional[float] = 0.1,
+                       limits: Optional[Tuple[Optional[RangedType], Optional[RangedType]]] = None) \
+        -> Optional[Tuple[RangedType, RangedType]]:
+    if not minmaxrange:
+        return None
+    range_mins: List[RangedType]
+    range_maxs: List[RangedType]
+    range_min: RangedType
+    range_max: RangedType
+    range_mins, range_maxs = zip(*minmaxrange)
+    range_min, range_max = min(range_mins), max(range_maxs)
+    range_span: RangeSpanType = range_max - range_min
+    if pad:
+        range_pad: RangeSpanType = range_span * pad
+        range_min = range_min - range_pad
+        range_max = range_max + range_pad
+    if limits is not None:
+        limit_min: Optional[RangedType]
+        limit_max: Optional[RangedType]
+        limit_min, limit_max = limits
+        if limit_min is not None:
+            range_min = max(limit_min, range_min)
+        if limit_max is not None:
+            range_max = min(limit_max, range_max)
+    return range_min, range_max
+
+
+def append_xrange(xranges: List[Tuple[datetime, datetime]], array: np.ndarray, minmax: bool = False) -> None:
+    if not array.size:
+        return
+    bounds: Tuple[datetime, datetime]
+    if minmax:
+        bounds = (array.min(), array.max())
+    else:
+        bounds = (array[0], array[-1])
+    xranges.append(bounds)
+
+
+DL = TypeVar('DL', bound=DeviceLog)
+
+
+class MainTraceMaker(Protocol):
+    def __call__(self, *, log: DL, timeaxis: np.ndarray, data_name: str, yaxis: str, hue: float, **kwargs) \
+            -> Tuple[Optional[BaseTraceType], np.ndarray, np.ndarray, Tuple[float, float]]: ...
+
+
+def add_trace(fig: plotly_go.Figure, log: DL, timeaxis: np.ndarray,
+              main_mktrace_fn: MainTraceMaker,
+              yaxis: str, yranges: List[Tuple[float, float]], xranges: List[Tuple[datetime, datetime]],
+              row: int, col: int,
+              data_name: str, hue: float,
+              secondary_y: bool = False,
+              last_value_annotation: bool = True, annotation_postfix: Optional[str] = None,
+              raw_data_getter: Union[Callable[[DL], Tuple[np.ndarray, np.ndarray]], str, None] = None,
+              plot_long_avg: bool = False, plot_error_bands: bool = True, plot_mode: Optional[str] = None) -> None:
+    main_trace: Optional[BaseTraceType]
+    main_values: np.ndarray
+    main_times: np.ndarray
+    main_range: Tuple[float, float]
+    main_trace, main_values, main_times, main_range = main_mktrace_fn(log=log, timeaxis=timeaxis, yaxis=yaxis,
+                                                                      data_name=data_name, hue=hue)
+    if main_trace is None:
+        return
+    fig.add_trace(main_trace, row=row, col=col, secondary_y=secondary_y)
+    yranges.append(main_range)
+    append_xrange(xranges, main_times)
+    if last_value_annotation and plot_mode != 'prepend':
+        add_timed_annotation(fig, value=main_values[-1], timestamp=main_times[-1],
+                             postfix=annotation_postfix, yaxis=yaxis, hue=hue,
+                             row=row, col=col, secondary_y=secondary_y)
+    if plot_long_avg:
+        long_avg_trace: BaseTraceType
+        long_avg_trace, *_ = mktrace_long_avg(log=log, values=main_values,
+                                              timeaxis=main_times,
+                                              data_name=data_name, yaxis=yaxis, hue=hue)
+        fig.add_trace(long_avg_trace, row=row, col=col, secondary_y=secondary_y)
+    if plot_error_bands:
+        raw_times: np.ndarray
+        raw_values: np.ndarray
+        if isinstance(raw_data_getter, str):
+            raw_values_field_name: str = raw_data_getter
+            raw_unfiltered: np.ndarray
+            raw_mask: np.ndarray
+            raw_unfiltered, raw_mask = make_np_array(log=log, field_name=raw_values_field_name)
+            if raw_mask.size:
+                raw_times, raw_values = make_masked_arrays(timeaxis, raw_unfiltered, mask=raw_mask, log=log)
+            else:
+                raw_times = np.empty((0,))
+                raw_values = np.empty((0,))
+        elif callable(raw_data_getter):
+            raw_times, raw_values = raw_data_getter(log)
+        else:
+            raw_times, raw_values = main_times, main_values
+        if raw_values.size:
+            error_traces: Tuple[BaseTraceType, ...]
+            raw_range: Tuple[float, float]
+            error_traces, raw_range = mktrace_peaks_valleys(log=log, values=raw_values,
+                                                            timeaxis=raw_times,
+                                                            values_ref=main_values,
+                                                            data_name=data_name, yaxis=yaxis, hue=hue)
+            if error_traces:
+                for trace in error_traces:  # pylint: disable=not-an-iterable  # pylint bug?
+                    fig.add_trace(trace, row=row, col=col, secondary_y=secondary_y)
+                yranges.append(raw_range)
+                append_xrange(xranges, raw_times)
+
+
+def add_set_temps_trace(fig: plotly_go.Figure, log: Union[ThermDeviceLog, TempStationDeviceLog], timeaxis: np.ndarray,
+                        yranges: List[Tuple[float, float]], xranges: List[Tuple[datetime, datetime]],
+                        row: int, col: int,
+                        hue: float,
+                        secondary_y: bool = False, predict_until: Optional[datetime] = None,
+                        plot_mode: Optional[str] = None) -> None:
+    set_hue: float = math.fmod(hue - 150, 360)
+    temps_set_trace, _, temps_set_times, temps_set_range = mktrace_temps_set(log=log, timeaxis=timeaxis,
+                                                                             hue=set_hue)
+    if temps_set_trace is not None:
+        fig.add_trace(temps_set_trace, row=row, col=col, secondary_y=secondary_y)
+        yranges.append(temps_set_range)
+        append_xrange(xranges, temps_set_times)
+
+        if plot_mode != 'prepend':
+            # TODO: Differentiate predicted traces, as to be able to delete them through js
+            sched_temps: List[float] = log.device.config.sched_temps
+            last_timeaxis_time: datetime = timeaxis[-1]
+            next_timeaxis_hour: datetime = (last_timeaxis_time.replace(minute=0, second=0, microsecond=0)
+                                            + timedelta(hours=1))
+            last_hour_minutes: int = int((next_timeaxis_hour - last_timeaxis_time).total_seconds()) // 60
+            predicted_until: datetime = predict_until
+            predicted_hours: int = int((predicted_until - next_timeaxis_hour).total_seconds()) // 3600
+            predicted_temps: np.ndarray = np.repeat(sched_temps[last_timeaxis_time.hour], last_hour_minutes + 1)
+            predicted_temps = np.concatenate((
+                predicted_temps,
+                np.repeat([sched_temps[(next_timeaxis_hour + timedelta(hours=hr)).hour]
+                           for hr in range(predicted_hours)], 60)
+            ))
+            predicted_timeaxis: np.ndarray = np.array([last_timeaxis_time]
+                                                      + [next_timeaxis_hour + timedelta(minutes=m)
+                                                         for m in range(-last_hour_minutes, predicted_hours * 60)])
+            temps_set_predicted_trace, _, temps_set_predicted_times, temps_set_predicted_range = \
+                mktrace_temps_set(log=log, values=predicted_temps, timeaxis=predicted_timeaxis,
+                                  name_postfix='predicted',
+                                  hue=set_hue, showlegend=False, line_dash='dot', opacity=0.5)
+            fig.add_trace(temps_set_predicted_trace, row=row, col=col, secondary_y=secondary_y)
+            yranges.append(temps_set_predicted_range)
+            append_xrange(xranges, temps_set_predicted_times)
+
+
+def add_bat_trace(fig: plotly_go.Figure, log: Union[ThermDeviceLog, TempStationDeviceLog], timeaxis: np.ndarray,
+                  yranges: List[Tuple[float, float]], xranges: List[Tuple[datetime, datetime]],
+                  row: int, col: int,
+                  hue: float,
+                  secondary_y: bool = False, plot_mode: Optional[str] = None) -> None:
+    bat_hue: float = math.fmod(hue - 15, 360)
+    bat_voltage_trace, bat_voltage, bat_voltage_times, bat_voltage_smooth, bat_voltage_range = \
+        mktrace_bat_voltage(log=log, timeaxis=timeaxis, hue=bat_hue)
+
+    def bat_trace_fakemk(*, log: DL, timeaxis: np.ndarray, data_name: str, yaxis: str, hue: float, **kwargs) \
+            -> Tuple[Optional[BaseTraceType], np.ndarray, np.ndarray, Tuple[float, float]]:
+        return bat_voltage_trace, bat_voltage_smooth, bat_voltage_times, bat_voltage_range
+
+    add_trace(fig=fig, log=log, timeaxis=timeaxis, plot_mode=plot_mode, plot_long_avg=False,
+              main_mktrace_fn=bat_trace_fakemk,
+              raw_data_getter=lambda _: (bat_voltage_times, bat_voltage), data_name='bat',
+              yaxis='y4', yranges=yranges, xranges=xranges,
+              row=row, col=col, secondary_y=secondary_y,
+              annotation_postfix='V', hue=bat_hue)
+
+
+def add_daily_lines(fig: plotly_go.Figure, dt_start: datetime, dt_end: datetime) -> None:
+    dt = dt_end.replace(hour=0, minute=0, second=0, microsecond=0)
+    while dt < dt_start:
+        if dt >= dt_end:
+            fig.add_vline(x=dt.timestamp() * 1000,
+                          annotation_text=dt.strftime("%a, %d %b %Y"),
+                          annotation_textangle=0,
+                          annotation_position='bottom right',
+                          annotation_font=dict(color='rgba(191, 255, 255, 0.8)', size=9),
+                          annotation_yshift=-2,
+                          line_dash='dot',
+                          line_color='rgba(191, 255, 255, 0.8)',
+                          layer='below')
+        dt += timedelta(days=1)
+
+
 def create_plot_figure(devices: List[Device], plot_mode: Optional[str] = None,
                        log_getter: Optional[Callable[[Device], DeviceLog]] = None) \
         -> Tuple[plotly_go.Figure, Optional[datetime], Optional[datetime]]:
-    
+
     plot_figures_cache_cleanup()
 
     fig: plotly_go.Figure = make_subplots(
@@ -484,17 +709,6 @@ def create_plot_figure(devices: List[Device], plot_mode: Optional[str] = None,
     y3ranges: List[Tuple[float, float]] = []
     y4ranges: List[Tuple[float, float]] = []
 
-    def append_xrange(a: np.ndarray, minmax: bool = False):
-        nonlocal xranges
-        if not a.size:
-            return
-        bounds: Tuple[Any, Any]
-        if minmax:
-            bounds = (a.min(), a.max())
-        else:
-            bounds = (a[0], a[-1])
-        xranges.append(bounds)
-
     plot_until: datetime = datetime.now().replace(minute=0, second=0, microsecond=0) + timedelta(hours=3)
 
     hue: float = 210.0
@@ -504,107 +718,30 @@ def create_plot_figure(devices: List[Device], plot_mode: Optional[str] = None,
             continue
         device_config: DeviceConfig = device.config
         device_update_interval = device_config.get('update_interval')
-        
+
         timeaxis = make_timeaxis(log=log, non_roundable_interval=device_update_interval * 1.5)
-    
+
         if isinstance(log, (ThermDeviceLog, TempStationDeviceLog)):
-            temps_avg_trace, temps_avg, temps_avg_times, temps_avg_range = mktrace_temps_avg(log=log, timeaxis=timeaxis,
-                                                                                             hue=hue)
-            if temps_avg_trace is not None:
-                fig.add_trace(temps_avg_trace, row=1, col=1, secondary_y=True)
-                y2ranges.append(temps_avg_range)
-                append_xrange(temps_avg_times)
-                if plot_mode != 'prepend':
-                    add_timed_annotation(fig, value=temps_avg[-1], timestamp=temps_avg_times[-1],
-                                         postfix='°C', yaxis='y2', hue=hue, row=1, col=1, secondary_y=True)
+            add_trace(fig=fig, log=log, timeaxis=timeaxis, plot_mode=plot_mode,
+                      main_mktrace_fn=partial(mktrace_main, field_name='temp_average'),
+                      raw_data_getter='temp_current', data_name='temp',
+                      yaxis='y2', yranges=y2ranges, xranges=xranges,
+                      row=1, col=1, secondary_y=True,
+                      annotation_postfix='°C', hue=hue)
 
-                temps_houravg_trace, *_ = mktrace_houravg(log=log, values=temps_avg,
-                                                          timeaxis=temps_avg_times,
-                                                          data_name='temp', yaxis='y2', hue=hue)
-                fig.add_trace(temps_houravg_trace, row=1, col=1, secondary_y=True)
-
-            temps_cur, temps_cur_mask = make_np_array(log=log, field_name='temp_current')
-            if temps_cur_mask.size:
-                temps_cur_times: np.ndarray
-                temps_cur_masked: np.ndarray
-                temps_cur_times, temps_cur_masked = make_masked_arrays(timeaxis, temps_cur, mask=temps_cur_mask, log=log)
-                error_traces, raw_range = mktrace_peaks_valleys(log=log, values=temps_cur_masked,
-                                                                timeaxis=temps_cur_times,
-                                                                values_ref=temps_avg,
-                                                                data_name='temp', yaxis='y2', hue=hue)
-                if error_traces:
-                    for t in error_traces:
-                        fig.add_trace(t, row=1, col=1, secondary_y=True)
-                    y2ranges.append(raw_range)
-                    append_xrange(temps_cur_times)
-
-            set_hue: float = math.fmod(hue - 150, 360)
-            temps_set_trace, temps_set, temps_set_times, temps_set_range = mktrace_temps_set(log=log, timeaxis=timeaxis,
-                                                                                             hue=set_hue)
-            if temps_set_trace is not None:
-                fig.add_trace(temps_set_trace, row=1, col=1, secondary_y=True)
-                y2ranges.append(temps_set_range)
-                append_xrange(temps_set_times)
-
-                if plot_mode != 'prepend':
-                    # TODO: Differentiate predicted traces, as to be able to delete them through js
-                    sched_temps: List[float] = log.get_sched_temps(device_config)
-                    last_timeaxis_time: datetime = timeaxis[-1]
-                    next_timeaxis_hour: datetime = (last_timeaxis_time.replace(minute=0, second=0, microsecond=0)
-                                                    + timedelta(hours=1))
-                    last_hour_minutes: int = int((next_timeaxis_hour - last_timeaxis_time).total_seconds()) // 60
-                    predicted_until: datetime = plot_until
-                    predicted_hours: int = int((predicted_until - next_timeaxis_hour).total_seconds()) // 3600
-                    predicted_temps: np.ndarray = np.repeat(sched_temps[last_timeaxis_time.hour], last_hour_minutes + 1)
-                    predicted_temps = np.concatenate((
-                        predicted_temps,
-                        np.repeat([sched_temps[(next_timeaxis_hour + timedelta(hours=hr)).hour]
-                                   for hr in range(predicted_hours)], 60)
-                    ))
-                    predicted_timeaxis: np.ndarray = np.array([last_timeaxis_time]
-                                                              + [next_timeaxis_hour + timedelta(minutes=m)
-                                                                 for m in range(-last_hour_minutes, predicted_hours * 60)])
-                    temps_set_predicted_trace, _, temps_set_predicted_times, temps_set_predicted_range = \
-                        mktrace_temps_set(log=log, values=predicted_temps, timeaxis=predicted_timeaxis,
-                                          name_postfix='predicted',
-                                          hue=set_hue, showlegend=False, line_dash='dot', opacity=0.5)
-                    fig.add_trace(temps_set_predicted_trace, row=1, col=1, secondary_y=True)
-                    y2ranges.append(temps_set_predicted_range)
-                    append_xrange(temps_set_predicted_times)
+            add_set_temps_trace(fig=fig, log=log, timeaxis=timeaxis, plot_mode=plot_mode,
+                                yranges=y2ranges, xranges=xranges,
+                                row=1, col=1, secondary_y=True,
+                                predict_until=plot_until, hue=hue)
 
         if isinstance(log, TempStationDeviceLog):
             rh_hue: float = math.fmod(hue - 30, 360)
-
-            rhs_avg_trace, rhs_avg, rhs_avg_times, rhs_avg_range = mktrace_rhs_avg(log=log, timeaxis=timeaxis,
-                                                                                   hue=rh_hue, opacity=0.4)
-            if rhs_avg_trace is not None:
-                fig.add_trace(rhs_avg_trace, row=2, col=1)
-                y3ranges.append(rhs_avg_range)
-                append_xrange(rhs_avg_times)
-                if plot_mode != 'prepend':
-                    add_timed_annotation(fig, value=rhs_avg[-1], timestamp=rhs_avg_times[-1],
-                                         postfix='%', yaxis='y3', hue=rh_hue, row=2, col=1)
-
-                rhs_houravg_trace, *_ = mktrace_houravg(log=log, values=rhs_avg,
-                                                        timeaxis=rhs_avg_times,
-                                                        data_name='rh', yaxis='y3',
-                                                        hue=rh_hue, opacity=0.4)
-                fig.add_trace(rhs_houravg_trace, row=2, col=1)
-
-            rhs_cur, rhs_cur_mask = make_np_array(log=log, field_name='humidity_current')
-            if rhs_cur_mask.size:
-                rhs_cur_times: np.ndarray
-                rhs_cur_masked: np.ndarray
-                rhs_cur_times, rhs_cur_masked = make_masked_arrays(timeaxis, rhs_cur, mask=rhs_cur_mask, log=log)
-                error_traces, raw_range = mktrace_peaks_valleys(log=log, values=rhs_cur_masked,
-                                                                timeaxis=rhs_cur_times,
-                                                                values_ref=rhs_avg, data_name='rh', yaxis='y3',
-                                                                hue=rh_hue, opacity=0.2)
-                if error_traces:
-                    for t in error_traces:
-                        fig.add_trace(t, row=2, col=1)
-                    y3ranges.append(raw_range)
-                    append_xrange(rhs_cur_times)
+            add_trace(fig=fig, log=log, timeaxis=timeaxis, plot_mode=plot_mode,
+                      main_mktrace_fn=partial(mktrace_main, field_name='humidity_average'),
+                      raw_data_getter='humidity_current', data_name='rh',
+                      yaxis='y3', yranges=y3ranges, xranges=xranges,
+                      row=2, col=1, secondary_y=False,
+                      annotation_postfix='°%', hue=rh_hue)
 
         if isinstance(log, ThermDeviceLog):
             switch_hue: float = math.fmod(hue - 190, 360)
@@ -612,27 +749,11 @@ def create_plot_figure(devices: List[Device], plot_mode: Optional[str] = None,
             if switch_times_trace is not None:
                 fig.add_trace(switch_times_trace, row=1, col=1)
 
-        bat_hue: float = math.fmod(hue - 15, 360)
-        bat_voltage_trace, bat_voltage, bat_voltage_times, bat_voltage_smooth, bat_voltage_range = \
-            mktrace_bat_voltage(log=log, timeaxis=timeaxis, hue=bat_hue)
-        if bat_voltage_trace is not None:
-            fig.add_trace(bat_voltage_trace, row=3, col=1)
-            y4ranges.append(bat_voltage_range)
-            append_xrange(bat_voltage_times)
-            if plot_mode != 'prepend':
-                add_timed_annotation(fig, value=bat_voltage_smooth[-1], timestamp=bat_voltage_times[-1],
-                                     postfix='V', yaxis='y4', hue=bat_hue, row=3, col=1)
+        add_bat_trace(fig=fig, log=log, timeaxis=timeaxis, plot_mode=plot_mode,
+                      yranges=y4ranges, xranges=xranges,
+                      row=3, col=1, secondary_y=False, hue=hue)
 
-            error_traces, raw_range = mktrace_peaks_valleys(log=log, values=bat_voltage,
-                                                            timeaxis=bat_voltage_times,
-                                                            values_ref=bat_voltage_smooth,
-                                                            data_name='bat', yaxis='y4', hue=bat_hue)
-            if error_traces:
-                for t in error_traces:
-                    fig.add_trace(t, row=3, col=1)
-                y4ranges.append(raw_range)
-    
-        missing_data_trace = mktrace_missing_data(log=log, timeaxis=timeaxis, 
+        missing_data_trace = mktrace_missing_data(log=log, timeaxis=timeaxis,
                                                   interval_threshold=(device_update_interval * 5.0), hue=hue)
         fig.add_trace(missing_data_trace, row=1, col=1)
 
@@ -649,54 +770,13 @@ def create_plot_figure(devices: List[Device], plot_mode: Optional[str] = None,
                       line_color='magenta',
                       layer='below')
 
-    RangedType = Union[float, datetime]
-    RangeSpanType = Union[float, timedelta]
-
-    def compute_axis_range(minmaxrange: List[Tuple[RangedType, RangedType]], pad: Optional[float] = 0.1,
-                           limits: Optional[Tuple[Optional[RangedType], Optional[RangedType]]] = None) \
-            -> Optional[Tuple[RangedType, RangedType]]:
-        if not minmaxrange:
-            return None
-        range_mins: List[RangedType]
-        range_maxs: List[RangedType]
-        range_min: RangedType
-        range_max: RangedType
-        range_mins, range_maxs = zip(*minmaxrange)
-        range_min, range_max = min(range_mins), max(range_maxs)
-        range_span: RangeSpanType = range_max - range_min
-        if pad:
-            range_pad: RangeSpanType = range_span * pad
-            range_min = range_min - range_pad
-            range_max = range_max + range_pad
-        if limits is not None:
-            limit_min: Optional[RangedType]
-            limit_max: Optional[RangedType]
-            limit_min, limit_max = limits
-            if limit_min is not None:
-                range_min = max(limit_min, range_min)
-            if limit_max is not None:
-                range_max = min(limit_max, range_max)
-        return range_min, range_max
-
     xaxis_min: Optional[datetime] = None
     xaxis_max: Optional[datetime] = None
     if xranges:
         xaxis_min, xaxis_max = compute_axis_range(xranges, pad=0)
 
-    # Add daily lines
-    dt = xaxis_min.replace(hour=0, minute=0, second=0, microsecond=0)
-    while dt < xaxis_max:
-        if dt >= xaxis_min:
-            fig.add_vline(x=dt.timestamp() * 1000,
-                          annotation_text=dt.strftime("%a, %d %b %Y"),
-                          annotation_textangle=0,
-                          annotation_position='bottom right',
-                          annotation_font=dict(color='rgba(191, 255, 255, 0.8)', size=9),
-                          annotation_yshift=-2,
-                          line_dash='dot',
-                          line_color='rgba(191, 255, 255, 0.8)',
-                          layer='below')
-        dt += timedelta(days=1)
+    if xaxis_min and xaxis_min:
+        add_daily_lines(fig=fig, dt_start=xaxis_max, dt_end=xaxis_min)
 
     y2range: Optional[Tuple[RangedType]] = compute_axis_range(y2ranges, limits=(0.0, None))
     y3range: Optional[Tuple[RangedType]] = compute_axis_range(y3ranges, limits=(0.0, None))
@@ -846,7 +926,7 @@ def plot_ajax():
 @app.route('/')
 @compress.compressed()
 def homepage():
-    if not check_session_valid():
+    if not check_session_valid():  # TODO: Make this into a decorator and wrap routes
         return redirect(url_for('auth_page'))
     return render_template('status.jinja2')
 

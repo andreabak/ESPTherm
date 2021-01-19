@@ -91,7 +91,7 @@ def state_set(device_type: str) -> Response:
     :param device_type: the device type
     :return: the response for the device, json data with an object of state values overrides or empty
     """
-    device_id: Optional[str] = request.args.get('deviceid')
+    device_id: Optional[str] = request.args.get('deviceid')  # TODO: Feature expansion  # pylint: disable=unused-variable
 
     data: Dict = {}
 
