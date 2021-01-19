@@ -1,167 +1,41 @@
-"""Devices datastructures and code"""
+"""Base classes for devices logs"""
 
 from __future__ import annotations
 
-import json
-import os
 import dataclasses
+import os
 from abc import ABC, abstractmethod
 from collections import OrderedDict
 from contextlib import contextmanager, nullcontext
 from datetime import datetime, timedelta, timezone
 from threading import RLock
-from typing import (ClassVar, MutableMapping, Type, Optional, List, Tuple, Union, Any, Iterator, TypeVar, IO, Generator,
-                    Set, ContextManager, Iterable, Mapping, ForwardRef, Hashable, Generic, Sequence)
+from typing import (ClassVar, MutableMapping, Type, Set, Iterator, Tuple, Optional, List, Any, ForwardRef, Union,
+                    Iterable, Generator, Mapping, IO, ContextManager, Sequence, Hashable, TYPE_CHECKING)
 
 import dataset
 from dataset.util import ResultIter
+from dateutil.parser import parse as dateutil_parser
 from sqlalchemy import Integer, UnicodeText, Float, Boolean, DateTime, Column
 from sqlalchemy.sql.type_api import TypeEngine
-from dateutil.parser import parse as dateutil_parser
 
-from . import app
-from .base import LiveFileData, UniqueHashable, ensure_tz, chunked
-from .config import LOGS_PATH, LOGS_EXT, CONFIGS_PATH, CONFIGS_EXT, DEFAULT_CONFIG_BASENAME, LOGS_DB_PATH, LOGS_ROTATE_SIZE
+from ... import app
+from ...base import UniqueHashable, LiveFileData, ensure_tz, chunked
+from ...config import LOGS_PATH, LOGS_EXT, LOGS_DB_PATH, LOGS_ROTATE_SIZE
+
+from .common import DeviceBound, iterate_type_id_paths
+
+if TYPE_CHECKING:
+    from .config import DeviceConfig
+    from .device import Device
 
 
 __all__ = [
-    "DeviceConfig",
     "LogRecord",
     "DeviceLog",
-    "DeviceFullID",
-    "DeviceOptionalID",
-    "Device",
-    "ThermLogRecord",
-    "ThermDeviceLog",
-    "ThermDevice",
-    "TempStationLogRecord",
-    "TempStationDeviceLog",
-    "TempStationDevice",
-    "TempsDeviceLogRecord",
-    "TempsDeviceLog",
-    "TempsDevice"
 ]
 
 
-def iterate_type_id_paths(base_path: str, ext: str) -> Iterator[Tuple[str, str]]:
-    """
-    Helper function to iterate a directory structure like `base_path/type_name/id_name.ext`
-    :param base_path: the base path to start from
-    :param ext: the file extension to filter `id_name` files by.
-                If omitted or None, disables the filtering behaviour.
-    :return: an iterator of tuples of str with (type_name, id_name)
-    """
-    type_name: str
-    for type_name in os.listdir(base_path):
-        type_dir: str = os.path.join(base_path, type_name)
-        if os.path.isdir(type_dir):
-            filename: str
-            for filename in os.listdir(type_dir):
-                filepath: str = os.path.join(type_dir, filename)
-                id_name: str
-                file_ext: str
-                id_name, file_ext = os.path.splitext(filename)
-                if os.path.isfile(filepath) and file_ext == ext:
-                    yield type_name, id_name
-
-
-class DeviceConfig(UniqueHashable, LiveFileData, dict):
-    """
-    Class that represents a device's configuration, subclasses dict
-    """
-    # pylint: disable=arguments-differ
-    @classmethod
-    def file_path(cls, device_type: str, device_id: Optional[str] = None) -> str:
-        """
-        Builds and returns the path of a config file for a device.
-        :param device_type: the device type
-        :param device_id: the device id. If omitted or None, the path of the default
-                          config file for the device type is returned instead.
-        :return: the file path as a string
-        """
-        config_basename: str = DEFAULT_CONFIG_BASENAME if device_id is None else device_id
-        config_path: str = os.path.join(CONFIGS_PATH, device_type, config_basename + CONFIGS_EXT)
-        return config_path
-
-    @staticmethod
-    def iterate_available_configs() -> Iterator[Tuple[str, Optional[str]]]:
-        """
-        Iterates device type, id for all available config files
-        :return: an iterator of tuples of str, Optional[str] of (device_type, device_id)
-        """
-        device_type: str
-        device_id: Optional[str]
-        for device_type, device_id in iterate_type_id_paths(CONFIGS_PATH, ext=CONFIGS_EXT):
-            if device_id == DEFAULT_CONFIG_BASENAME:
-                device_id = None
-            yield device_type, device_id
-
-    @classmethod
-    def device_id_config_exists(cls, device_type: str, device_id: str) -> bool:
-        """
-        Check if a config file for a specific device_type and device_id exists
-        :param device_type: the device type
-        :param device_id: the device id
-        :return: True if the config file exists, else False
-        """
-        config_path: str = cls.file_path(device_type, device_id)
-        return os.path.exists(config_path)
-
-    @classmethod
-    def from_type_id(cls, device_type: str, device_id: Optional[str] = None) -> DeviceConfig:
-        """
-        Build a `DeviceConfig` instance loading data for a device type and id
-        :param device_type: the device type
-        :param device_id: the device id.
-                          If omitted or None, the default config for the device type will be used instead.
-        :return: the built `DeviceConfig` instance
-        """
-        config_path: str = cls.file_path(device_type, device_id)
-        if not os.path.exists(config_path):
-            raise FileNotFoundError(f'Device config file does not exist: {config_path}')
-        config_mtime: float = cls.file_mtime(path=config_path)
-        config: DeviceConfig = cls(device_type=device_type, device_id=device_id,
-                                   loaded_path=config_path, loaded_mtime=config_mtime)
-        fp: IO
-        with open(config_path, 'r') as fp:
-            config_data: MutableMapping[str, Any] = json.load(fp)
-        config.update(config_data)
-        config.freeze()
-        return config
-
-    @classmethod
-    def from_device(cls, device: Device) -> DeviceConfig:
-        """
-        Build a `DeviceConfig` instance from a `Device` object, loading from the correct config file
-        :param device: the `Device` object
-        :return: the built `DeviceConfig` instance
-        """
-        device_type: str
-        device_id: Optional[str]
-        device_type, device_id = device.full_device_id
-        if not cls.device_id_config_exists(device_type, device_id):
-            device_id = None
-        return cls.from_type_id(device_type, device_id)
-
-    def __init__(self, device_type: str, device_id: Optional[str], *args, **kwargs):
-        """
-        Initialization for `DeviceConfig`
-        :param device_type: the device type
-        :param device_id: the device id
-        :param args: additional positional arguments to be passed to `super().__init__(...)`
-        :param kwargs: additional keyword arguments to be passed to `super().__init__(...)`
-        """
-        super().__init__(*args, **kwargs)
-        self.device_type: str = device_type
-        self.device_id: Optional[str] = device_id
-
-    @property
-    def unique_id(self) -> Any:
-        return (self.device_type, self.device_id), self.loaded_mtime
-
-
-# TODO: Refactor classes that register against device_type with some mixin or metaclass?
-
+# TODO: Refactor some methods to remove redundant device_type args
 # pylint: disable=invalid-name
 @dataclasses.dataclass(frozen=True)
 class LogRecord(ABC):
@@ -178,8 +52,8 @@ class LogRecord(ABC):
     """Mapping from field types to SQLAlchemy column types"""
 
     # TODO: Replace fields class variables with factory methods to make overridable?
-    
-    DB_PKEY_FIELDS: ClassVar[Set[str]] = {'timestamp'}  
+
+    DB_PKEY_FIELDS: ClassVar[Set[str]] = {'timestamp'}
     """Set of field names that are primary keys columns in the database device-type's table"""
 
     DB_IDX_FIELDS: ClassVar[Set[str]] = {'timestamp'}
@@ -189,7 +63,7 @@ class LogRecord(ABC):
 
     @staticmethod
     @abstractmethod
-    def _get_device_type() -> str: 
+    def _get_device_type() -> str:
         """
         Abstract static method that subclasses must implement
         to return the associated device type as string.
@@ -206,7 +80,7 @@ class LogRecord(ABC):
         for k, v in cls._device_types_classes.items():
             yield k, v
 
-    def __init_subclass__(cls): 
+    def __init_subclass__(cls):
         """
         Initializes a defined `LogRecord` subclass, registering it's associated device type.
         :raise NameError: if a subclass is being initialized with the same device type as an another one
@@ -219,7 +93,7 @@ class LogRecord(ABC):
         cls._device_types_classes[device_type] = cls
 
     @classmethod
-    def get_class_for_device_type(cls, device_type: str) -> Type[LogRecord]: 
+    def get_class_for_device_type(cls, device_type: str) -> Type[LogRecord]:
         """
         Gets the `LogRecord` class for the given device type.
         :param device_type: the device type for which to get the `LogRecord` class
@@ -232,7 +106,7 @@ class LogRecord(ABC):
         return log_class
 
     @classmethod
-    def for_type(cls, device_type: str, *args, **kwargs) -> LogRecord: 
+    def for_type(cls, device_type: str, *args, **kwargs) -> LogRecord:
         """
         Creates a `LogRecord` instance using the appropriate subclass for the given device type
         :param device_type: the device type for which to instantiate the correct `LogRecord` subclass
@@ -335,28 +209,6 @@ class LogRecord(ABC):
         return self.__class__(**values)
 
 
-class DeviceBound(ABC):
-    """
-    Abstract mixin class that keeps a read only attribute
-    linking to a `Device` object set at initialization
-    """
-    def __init__(self, device: Device, *args, **kwargs):
-        """
-        Initialization for `DeviceBound`
-        :param device: the `Device` object to link this instance to
-        :param args: additional positional arguments to be passed to `super().__init__(...)`
-        :param kwargs: additional keyword arguments to be passed to `super().__init__(...)`
-        """
-        super().__init__(*args, **kwargs)
-        self._device: Device = device
-
-    @property
-    def device(self) -> Device:
-        """The `Device` object linked to this instance"""
-        return self._device
-
-
-# TODO: Refactor some methods to remove redundant device_type args
 class DeviceLog(UniqueHashable, DeviceBound, LiveFileData, list, ABC):
     """
     Abstract base class that represents a loaded device log's data, subclasses list
@@ -474,6 +326,8 @@ class DeviceLog(UniqueHashable, DeviceBound, LiveFileData, list, ABC):
         :return: a generator that yields instances of the appropriate `LogRecord` subclass,
                  and finally returns a tuple of floats or None as (average_records_interval, average_sync_interval)
         """
+        from .device import Device
+
         lines_iterator: Iterable[Union[str, Mapping[str, Any]]]
         if isinstance(str_or_iterable, str):
             lines_iterator = str_or_iterable.splitlines()
@@ -766,388 +620,3 @@ class DeviceLog(UniqueHashable, DeviceBound, LiveFileData, list, ABC):
     def device_id(self) -> str:
         """Shortcut property for the device id of the associated `Device` object"""
         return self.device.device_id
-
-
-DeviceFullID = Tuple[str, str]
-DeviceOptionalID = Tuple[str, Optional[str]]
-CT = TypeVar('CT', bound=DeviceConfig)
-LT = TypeVar('LT', bound=DeviceLog)
-
-
-# noinspection SyntaxError
-class Device(ABC, Generic[CT, LT]):
-    """
-    Abstract base class that represents a device and its related data
-    """
-    _device_types_classes: ClassVar[MutableMapping[str, Type[Device]]] = {}
-    _known_devices: ClassVar[MutableMapping[DeviceFullID, Device]] = {}
-    _cached_configs: ClassVar[MutableMapping[DeviceOptionalID, CT]] = {}
-
-    @staticmethod
-    @abstractmethod
-    def _get_device_type() -> str: 
-        """
-        Abstract static method that subclasses must implement
-        to return the associated device type as string.
-        N.B. if two subclasses are defined with the same device type,
-             a NameError will be raised.
-        """
-
-    @staticmethod
-    def _get_config_class() -> Type[DeviceConfig]:
-        """
-        Static method that returns the class used as `DeviceConfig`.
-        """
-        return DeviceConfig
-
-    @staticmethod
-    @abstractmethod
-    def _get_log_class() -> Type[DeviceLog]:
-        """
-        Abstract static method that subclasses must implement to return
-        the associated `DeviceLog` subclass for their specific device type.
-        """
-
-    def __init_subclass__(cls, **kwargs): 
-        """
-        Initializes a defined `Device` subclass, registering it's associated device type.
-        :raise NameError: if a subclass is being initialized with the same device type as an another one
-        """
-        device_type: str = cls._get_device_type()
-        existing_device_type_class: Type[Device] = cls._device_types_classes.get(device_type)
-        if existing_device_type_class is not None:
-            raise NameError(f'More than one {Device.__name__} class with same device type "{device_type}" defined: '
-                            f'{existing_device_type_class.__name__} and {cls.__name__}')
-        cls._device_types_classes[device_type] = cls
-
-    @classmethod
-    def get_class_for_device_type(cls, device_type) -> Type[Device]: 
-        """
-        Gets the `Device` class for the given device type.
-        :param device_type: the device type for which to get the `Device` class
-        :raise NameError: if no class for the given device type is found
-        :return: the registered `Device` class for the device type
-        """
-        device_type_cls: Optional[Type[Device]] = cls._device_types_classes.get(device_type)
-        if device_type_cls is None:
-            raise KeyError(f'No {Device.__name__} subclass found for device type "{device_type}"')
-        return device_type_cls
-
-    @classmethod
-    def for_type(cls, device_type: str, *args, **kwargs) -> Device: 
-        """
-        Creates a `Device` instance using the appropriate subclass for the given device type
-        :param device_type: the device type for which to instantiate the correct `Device` subclass
-        :param args: additional positional arguments to be passed to the `Device` subclass' `__init__(...)`
-        :param kwargs: additional keyword arguments to be passed to the `Device` subclass' `__init__(...)`
-        :return: the instantiated `Device` subclass' instance
-        """
-        device_cls = cls.get_class_for_device_type(device_type)
-        return device_cls(*args, **kwargs)
-
-    @classmethod
-    def _register_instance(cls, instance: Device) -> None:
-        """
-        Internal class method that registers an instantiated `Device` object as a known device
-        with its full id, ensuring there are no conflicts.
-        :param instance: the instantiated `Device` instance
-        """
-        instance_full_id: DeviceFullID = instance.full_device_id
-        conflicting_device: Optional[Device] = cls._known_devices.get(instance_full_id)
-        if conflicting_device is not None:
-            raise ValueError(f'Instantiating new device {repr(instance)} with same full id "{instance_full_id}" '
-                             f'as already existing instance {repr(conflicting_device)}')
-        cls._known_devices[instance_full_id] = instance
-
-    @classmethod
-    def iterate_known_devices(cls) -> Iterator[Device]:
-        """
-        Iterates all known devices.
-        :return: an iterator of `Device` objects
-        """
-        for device in cls._known_devices.values():
-            yield device
-
-    @classmethod
-    def get_known_device(cls, device_type: str, device_id: str) -> Device:
-        """
-        Get a known device by type and id.
-        :param device_type: the device type
-        :param device_id: the device id
-        :raise KeyError: if there's no known device with the given type and id
-        :return: the known `Device` object
-        """
-        return cls._known_devices[(device_type, device_id)]
-
-    @classmethod
-    def load_logged_devices(cls) -> None:
-        """Preloads all known devices from available log files."""
-        for device_type, device_id in DeviceLog.iterate_available_logs():
-            cls.for_type(device_type=device_type, device_id=device_id, preload=True)
-
-    @classmethod
-    def get_config(cls, device_type: str, device_id: Optional[str]) -> CT:
-        """
-        Class method to get a config for the specified device type and id.
-        Configs are internally cached and kept up-to-date.
-        :param device_type: the device type
-        :param device_id: the device id
-        :return: the device config object
-        """
-        if not DeviceConfig.device_id_config_exists(device_type, device_id):
-            device_id = None
-        full_id = device_type, device_id
-        cached_config: Optional[CT] = cls._cached_configs.get(full_id)
-        if cached_config is None or not cached_config.uptodate:
-            cls._cached_configs[full_id] = DeviceConfig.from_type_id(device_type, device_id)
-        return cls._cached_configs[full_id]
-
-    @classmethod
-    def load_known_configs(cls) -> None:
-        """Preloads all known device configs, caching them."""
-        for device_type, device_id in DeviceConfig.iterate_available_configs():
-            cls.get_config(device_type, device_id)
-
-    @classmethod
-    def load_known_devices(cls):
-        """Preloads all known devices and their configs."""
-        cls.load_known_configs()
-        cls.load_logged_devices()
-
-    def __init__(self, device_id: str, preload: bool = False):
-        """
-        Initialization for `Device`
-        :param device_id: the device id
-        :param preload: if True, preloads device's config and log data. Defaults to False
-        """
-        self._device_id: str = device_id
-        self._config: Optional[CT] = None
-
-        self.__class__._register_instance(self)
-
-        if preload:
-            self._load_config()
-            self._get_log_class().reflect_to_db(device_type=self.device_type, device_id=self.device_id)
-
-    @property
-    def device_type(self) -> str:
-        """The device type of this instance."""
-        return self._get_device_type()
-
-    @property
-    def device_id(self) -> str:
-        """The device id of this instance."""
-        return self._device_id
-
-    @property
-    def full_device_id(self) -> DeviceFullID:
-        """The complete device id as a tuple of (device_type, device_id)."""
-        return self.device_type, self._device_id
-
-    def _load_config(self) -> None:
-        """Internal method that loads the device's config into the instance."""
-        self._config = self.get_config(self.device_type, self.device_id)
-
-    @property
-    def config(self) -> CT:
-        """The device's config"""
-        if self._config is None or not self._config.uptodate:
-            self._load_config()
-        return self._config
-
-    def get_log(self, **filters) -> LT:
-        """
-        Gets a device log, applying any specified loading filters
-        :param filters: additional keyword arguments passed to the log class to filter the records
-        :return: the loaded device log
-        """
-        # noinspection PyUnresolvedReferences,SyntaxError,Annotator
-        return self._get_log_class().from_device(self, **filters)  # type: ignore[return-value]
-
-    @property
-    def full_log(self) -> LT:
-        """The full log of the device, with all the existing records.
-        N.B. This might take a long time to load."""
-        return self.get_log()
-
-    @property
-    def log_daily(self) -> LT:
-        """The device log of only the last 24 hours"""
-        # TODO: UTC conversion? Check
-        # Rounding to hour to allow caching
-        daily_min_dt: datetime = (datetime.now() - timedelta(hours=24)).replace(minute=0, second=0, microsecond=0)
-        return self.get_log(timestamp_min=daily_min_dt)
-
-
-@dataclasses.dataclass(frozen=True)
-class TempsDeviceLogRecord:
-    """
-    Dataclass mixin for LogRecords that store temperatures
-    """
-    temp_current: Optional[float]
-    """The current raw unfiltered temperature value"""
-
-    temp_average: Optional[float]
-    """The averaged temperature value, as per device's config"""
-
-
-@dataclasses.dataclass(frozen=True)
-class ThermLogRecord(TempsDeviceLogRecord, LogRecord):
-    """
-    `LogRecord` subclass for "therm" device types
-    """
-    @staticmethod
-    def _get_device_type() -> str:
-        return 'therm'
-
-    operating_mode: str
-    """Operating mode of the therm device at log record time"""
-
-    temp_set: Optional[float]
-    """The set threshold temperature for the device at log record time,
-    usually derived from the configured schedule"""
-
-    therm_state: bool
-    """The thermostat switch state at log record time"""
-
-    tampered: bool
-    """Whether the tamper switch has been detected"""
-
-    grace_given: bool
-    """Whether the thermostat is operating in "grace" mode (obsolete)"""
-
-    @classmethod
-    def from_raw_logline(cls, raw_line: str) -> LogRecord:
-        line_items: List[str] = raw_line.rstrip('\r\n').split(' ')
-        timestamp: Optional[datetime] = dateutil_parser(line_items[0]) if line_items[0] else None
-        offset: int
-        has_opmode: bool
-        try:
-            float(line_items[1])
-        except ValueError:
-            has_opmode = True
-            offset = 0
-        else:
-            has_opmode = False
-            offset = -1
-        return cls(
-            timestamp=timestamp,
-            timestamp_missing=timestamp is None,
-            operating_mode=line_items[1] if has_opmode else 'schedule',
-            temp_current=float(line_items[2+offset]) if line_items[2+offset] else None,
-            temp_average=float(line_items[3+offset]) if line_items[3+offset] else None,
-            temp_set=float(line_items[4+offset]) if line_items[4+offset] else None,
-            therm_state=line_items[5+offset] == 'on',
-            wlan_active=line_items[6+offset] == 'wlan',
-            tampered=line_items[7+offset] == 'tampered',
-            grace_given=line_items[8+offset] == 'gracious',
-            battery_voltage=None,
-        )
-
-
-# TODO: Refactor get_sched_temps in DeviceLog subclasses into a temps_set mixin
-
-class ThermDeviceLog(DeviceLog):
-    """
-    `DeviceLog` subclass for "therm" device types
-    """
-    @staticmethod
-    @abstractmethod
-    def get_logrecord_class() -> Type[LogRecord]:
-        return ThermLogRecord
-
-    @staticmethod
-    def get_sched_temps(config: Mapping[str, Any]) -> List[float]:
-        """
-        Helper static method to get the schedule temperatures from a given device config dict.
-        :param config: a mapping-like object (config or dict)
-        :return: the list of hourly scheduled temperatures
-        """
-        return config['thermostat']['sched_temps']
-
-
-# pylint: disable=missing-function-docstring,unsubscriptable-object
-class ThermDevice(Device[DeviceConfig, ThermDeviceLog]):
-    """
-    `Device` subclass for "therm" device types
-    """
-    @staticmethod
-    def _get_device_type() -> str:
-        return 'therm'
-
-    @staticmethod
-    def _get_log_class() -> Type[DeviceLog]:
-        return ThermDeviceLog
-
-
-@dataclasses.dataclass(frozen=True)
-class TempStationLogRecord(TempsDeviceLogRecord, LogRecord):
-    """
-    `LogRecord` subclass for "tempstation" device types
-    """
-    @staticmethod
-    def _get_device_type() -> str:
-        return 'tempstation'
-
-    humidity_current: Optional[float]
-    """The current raw unfiltered temperature value"""
-
-    humidity_average: Optional[float]
-    """The averaged temperature value, as per device's config"""
-
-    temp_set: Optional[float]
-    """The set threshold temperature for the device at log record time,
-    usually derived from the configured schedule"""
-
-    @classmethod
-    def from_raw_logline(cls, raw_line: str) -> LogRecord:
-        line_items: List[str] = raw_line.rstrip('\r\n').split(' ')
-        timestamp: Optional[datetime] = dateutil_parser(line_items[0]) if line_items[0] else None
-        return cls(
-            timestamp=timestamp,
-            timestamp_missing=timestamp is None,
-            temp_current=float(line_items[1]) if line_items[1] else None,
-            temp_average=float(line_items[2]) if line_items[2] else None,
-            humidity_current=float(line_items[3]) if line_items[3] else None,
-            humidity_average=float(line_items[4]) if line_items[4] else None,
-            temp_set=float(line_items[5]) if line_items[5] else None,
-            wlan_active=line_items[6] == 'wlan',
-            battery_voltage=float(line_items[7]) if len(line_items) > 7 and line_items[7] else None,
-        )
-
-
-class TempStationDeviceLog(DeviceLog):
-    """
-    `DeviceLog` subclass for "tempstation" device types
-    """
-    @staticmethod
-    @abstractmethod
-    def get_logrecord_class() -> Type[LogRecord]:
-        return TempStationLogRecord
-
-    @staticmethod
-    def get_sched_temps(config: MutableMapping[str, Any]) -> List[float]:
-        """
-        Helper static method to get the schedule temperatures from a given device config dict.
-        :param config: a mapping-like object (config or dict)
-        :return: the list of hourly scheduled temperatures
-        """
-        return config['station']['sched_temps']
-
-
-# pylint: disable=missing-function-docstring,unsubscriptable-object
-class TempStationDevice(Device[DeviceConfig, TempStationDeviceLog]):
-    """
-    `Device` subclass for "tempstation" device types
-    """
-    @staticmethod
-    def _get_device_type() -> str:
-        return 'tempstation'
-
-    @staticmethod
-    def _get_log_class() -> Type[DeviceLog]:
-        return TempStationDeviceLog
-
-
-TempsDeviceLog = Union[ThermDeviceLog, TempStationDeviceLog]
-TempsDevice = Union[ThermDevice, TempStationDevice]

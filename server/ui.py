@@ -21,8 +21,8 @@ from flask import request, url_for, jsonify, render_template, send_from_director
 from . import app, compress
 from .config import server_config
 from .base import ensure_tz
-from .devices import DeviceLog, ThermDeviceLog, TempStationDeviceLog, TempsDeviceLog, Device, DeviceConfig
-
+from .devices.base import DeviceConfig, DeviceLog, Device
+from .devices import TempsDeviceLog, ThermDeviceLog, TempStationDeviceLog
 
 SESSION_COOKIE_NAME: str = 'flasksession'
 

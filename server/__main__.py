@@ -10,7 +10,7 @@ from . import app
 # Import routes
 from . import sync
 from . import ui
-from .devices import Device
+from .devices.base import Device
 
 
 if __name__ == "__main__":
