@@ -160,6 +160,8 @@ class DeviceConfig(UniqueHashable, LiveFileData, dict):
         return (self.device_type, self.device_id), self.loaded_mtime
 
 
+# TODO: Refactor classes that register against device_type with some mixin or metaclass?
+
 # pylint: disable=invalid-name
 @dataclasses.dataclass(frozen=True)
 class LogRecord(ABC):
@@ -175,17 +177,19 @@ class LogRecord(ABC):
     }
     """Mapping from field types to SQLAlchemy column types"""
 
-    DB_PKEY_FIELDS: ClassVar[Set[str]] = {'timestamp'}  # TODO: Replace with a factory to make this better overridable?
+    # TODO: Replace fields class variables with factory methods to make overridable?
+    
+    DB_PKEY_FIELDS: ClassVar[Set[str]] = {'timestamp'}  
     """Set of field names that are primary keys columns in the database device-type's table"""
 
-    DB_IDX_FIELDS: ClassVar[Set[str]] = {'timestamp'}  # TODO: Replace with a factory to make this better overridable?
+    DB_IDX_FIELDS: ClassVar[Set[str]] = {'timestamp'}
     """Set of field names that are indexed columns in the database device-type's table"""
 
     _device_types_classes: ClassVar[MutableMapping[str, Type[LogRecord]]] = {}
 
     @staticmethod
     @abstractmethod
-    def _get_device_type() -> str:  # TODO: Refactor as mixin/meta?
+    def _get_device_type() -> str: 
         """
         Abstract static method that subclasses must implement
         to return the associated device type as string.
@@ -202,7 +206,7 @@ class LogRecord(ABC):
         for k, v in cls._device_types_classes.items():
             yield k, v
 
-    def __init_subclass__(cls):  # TODO: Refactor as mixin/meta?
+    def __init_subclass__(cls): 
         """
         Initializes a defined `LogRecord` subclass, registering it's associated device type.
         :raise NameError: if a subclass is being initialized with the same device type as an another one
@@ -215,7 +219,7 @@ class LogRecord(ABC):
         cls._device_types_classes[device_type] = cls
 
     @classmethod
-    def get_class_for_device_type(cls, device_type: str) -> Type[LogRecord]:  # TODO: Refactor as mixin/meta?
+    def get_class_for_device_type(cls, device_type: str) -> Type[LogRecord]: 
         """
         Gets the `LogRecord` class for the given device type.
         :param device_type: the device type for which to get the `LogRecord` class
@@ -228,7 +232,7 @@ class LogRecord(ABC):
         return log_class
 
     @classmethod
-    def for_type(cls, device_type: str, *args, **kwargs) -> LogRecord:  # TODO: Refactor as mixin/meta?
+    def for_type(cls, device_type: str, *args, **kwargs) -> LogRecord: 
         """
         Creates a `LogRecord` instance using the appropriate subclass for the given device type
         :param device_type: the device type for which to instantiate the correct `LogRecord` subclass
@@ -352,6 +356,7 @@ class DeviceBound(ABC):
         return self._device
 
 
+# TODO: Refactor some methods to remove redundant device_type args
 class DeviceLog(UniqueHashable, DeviceBound, LiveFileData, list, ABC):
     """
     Abstract base class that represents a loaded device log's data, subclasses list
@@ -452,7 +457,7 @@ class DeviceLog(UniqueHashable, DeviceBound, LiveFileData, list, ABC):
             fp.write(log_data)
         return log_data
 
-    @classmethod  # TODO: Refactor device_type out of the method or make it static?
+    @classmethod
     def parse_records(cls, str_or_iterable: Union[str, Iterable], device_type: str, device_id: Optional[str] = None,
                       last_known_date: Optional[datetime] = None,
                       interval_avg_max_deviation: float = 0.2, ema_alpha: float = 0.25) \
@@ -505,7 +510,7 @@ class DeviceLog(UniqueHashable, DeviceBound, LiveFileData, list, ABC):
                 elif isinstance(record, (dict, OrderedDict)):
                     record = dict(record)
                     record.pop('device_id')
-                    # TODO: lineno from db rowid?
+                    # TODO: lineno from db rowid for logger?
                     # noinspection PyArgumentList
                     log_record = log_record_cls(**record)
                 else:
@@ -550,7 +555,7 @@ class DeviceLog(UniqueHashable, DeviceBound, LiveFileData, list, ABC):
             average_sync_interval = expected_sync_interval
         return average_records_interval, average_sync_interval
 
-    @classmethod  # TODO: Refactor device_type out of the method or make it static?
+    @classmethod
     def parse_iter(cls, iterable: Iterable[Any], device_type: str, device_id: str, **parser_kwargs) \
             -> Tuple[List[LogRecord], Optional[float], Optional[float]]:
         """
@@ -576,7 +581,7 @@ class DeviceLog(UniqueHashable, DeviceBound, LiveFileData, list, ABC):
                 log_records.append(record)
         return log_records, average_records_interval, average_sync_interval
 
-    @classmethod  # TODO: Refactor device_type out of the method or make it static?
+    @classmethod
     def parse_file(cls, file_path_or_fp: Union[str, IO], device_type: str, device_id: str, **parser_kwargs) \
             -> Tuple[List[LogRecord], Optional[float], Optional[float]]:
         """
@@ -595,7 +600,7 @@ class DeviceLog(UniqueHashable, DeviceBound, LiveFileData, list, ABC):
         with file_context as fp:
             return cls.parse_iter(fp, device_type=device_type, device_id=device_id, **parser_kwargs)
 
-    @classmethod  # TODO: Refactor device_type out of the method or make it static?
+    @classmethod
     def parse_db(cls, device_type: str, device_id: str,
                  timestamp_min: Optional[datetime] = None, timestamp_max: Optional[datetime] = None,
                  bound_exclusive: Optional[bool] = None, **parser_kwargs) \
@@ -762,9 +767,6 @@ class DeviceLog(UniqueHashable, DeviceBound, LiveFileData, list, ABC):
         """Shortcut property for the device id of the associated `Device` object"""
         return self.device.device_id
 
-    # TODO: Override uptodate with if check for mode
-    # TODO: Add unified interface to check log start/end timestamps
-
 
 DeviceFullID = Tuple[str, str]
 DeviceOptionalID = Tuple[str, Optional[str]]
@@ -783,7 +785,7 @@ class Device(ABC, Generic[CT, LT]):
 
     @staticmethod
     @abstractmethod
-    def _get_device_type() -> str:  # TODO: Refactor as mixin/meta?
+    def _get_device_type() -> str: 
         """
         Abstract static method that subclasses must implement
         to return the associated device type as string.
@@ -806,7 +808,7 @@ class Device(ABC, Generic[CT, LT]):
         the associated `DeviceLog` subclass for their specific device type.
         """
 
-    def __init_subclass__(cls, **kwargs):  # TODO: Refactor as mixin/meta?
+    def __init_subclass__(cls, **kwargs): 
         """
         Initializes a defined `Device` subclass, registering it's associated device type.
         :raise NameError: if a subclass is being initialized with the same device type as an another one
@@ -819,7 +821,7 @@ class Device(ABC, Generic[CT, LT]):
         cls._device_types_classes[device_type] = cls
 
     @classmethod
-    def get_class_for_device_type(cls, device_type) -> Type[Device]:  # TODO: Refactor as mixin/meta?
+    def get_class_for_device_type(cls, device_type) -> Type[Device]: 
         """
         Gets the `Device` class for the given device type.
         :param device_type: the device type for which to get the `Device` class
@@ -832,7 +834,7 @@ class Device(ABC, Generic[CT, LT]):
         return device_type_cls
 
     @classmethod
-    def for_type(cls, device_type: str, *args, **kwargs) -> Device:  # TODO: Refactor as mixin/meta?
+    def for_type(cls, device_type: str, *args, **kwargs) -> Device: 
         """
         Creates a `Device` instance using the appropriate subclass for the given device type
         :param device_type: the device type for which to instantiate the correct `Device` subclass
@@ -1043,6 +1045,8 @@ class ThermLogRecord(TempsDeviceLogRecord, LogRecord):
         )
 
 
+# TODO: Refactor get_sched_temps in DeviceLog subclasses into a temps_set mixin
+
 class ThermDeviceLog(DeviceLog):
     """
     `DeviceLog` subclass for "therm" device types
@@ -1053,7 +1057,7 @@ class ThermDeviceLog(DeviceLog):
         return ThermLogRecord
 
     @staticmethod
-    def get_sched_temps(config: Mapping[str, Any]) -> List[float]:  # TODO: Refactor into a temps_set mixin
+    def get_sched_temps(config: Mapping[str, Any]) -> List[float]:
         """
         Helper static method to get the schedule temperatures from a given device config dict.
         :param config: a mapping-like object (config or dict)
@@ -1122,7 +1126,7 @@ class TempStationDeviceLog(DeviceLog):
         return TempStationLogRecord
 
     @staticmethod
-    def get_sched_temps(config: MutableMapping[str, Any]) -> List[float]:  # TODO: Refactor into a temps_set mixin
+    def get_sched_temps(config: MutableMapping[str, Any]) -> List[float]:
         """
         Helper static method to get the schedule temperatures from a given device config dict.
         :param config: a mapping-like object (config or dict)
