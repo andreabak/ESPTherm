@@ -1,13 +1,13 @@
 function formatTimer(secs) {
-    function pad(n) {
+    const pad = function (n) {
         return (n < 10 ? "0" + n : n);
-    }
+    };
 
-    var h = Math.floor(secs / 3600);
-    var m = Math.floor(secs / 60) - (h * 60);
-    var s = Math.floor(secs - h * 3600 - m * 60);
+    let h = Math.floor(secs / 3600);
+    let m = Math.floor(secs / 60) - (h * 60);
+    let s = Math.floor(secs - h * 3600 - m * 60);
 
-    let strs = [];
+    const strs = [];
     if (h) {
         strs.push(h + 'h');
     }
@@ -15,7 +15,8 @@ function formatTimer(secs) {
         if (h) m = pad(m);
         strs.push(m + 'm');
     }
-    if (m || h) s = pad(s);
+    if (m || h)
+        s = pad(s);
     strs.push(s + 's');
 
     return strs.join(' ');
@@ -25,22 +26,22 @@ $(window).on('load', function () {
     let updateTimer = null;
     let expectedUpdateInterval = null;
     let updateTimerStart = null;
-    let updateTimerEl = $('#update_timer');
+    const updateTimerEl = $('#update_timer');
     let plotlyConfig = {responsive: true, displayModeBar: false};
-    let plotEl = $('#therm_plot');
-    let plotDiv = plotEl[0];
+    const plotEl = $('#therm_plot');
+    const plotDiv = plotEl[0];
     let loadedFrom = null;
     let loadedTo = null;
     let ajaxPending = false;
     let autoRefresh = true;
-    let disableAutoRefresh = function () {
+    const disableAutoRefresh = function () {
         autoRefresh = false;
         if (updateTimer !== null) {
             window.clearTimeout(updateTimer);
             updateTimer = null;
         }
     };
-    let adjustTicks = function () {
+    const adjustTicks = function () {
         const plotWidth = $(plotDiv).width();
         const plotHrRange = ((new Date(plotDiv.layout.xaxis.range[1])).getTime()
                             - (new Date(plotDiv.layout.xaxis.range[0])).getTime()) / 3600000;
@@ -50,8 +51,97 @@ $(window).on('load', function () {
         if (dyntick != plotDiv.layout.xaxis.dtick)
             Plotly.relayout(plotDiv, {"xaxis.dtick": dyntick, "xaxis2.dtick": dyntick, "xaxis3.dtick": dyntick});
     };
-    let createPlot = function (loadFrom, loadTo, exclusiveBounds, mode) {
-        let queryArgs = {};
+    const concatArrays = function (existingArray, newArray, concatMode) {
+        if (existingArray === undefined && newArray === undefined)
+            return undefined;
+        let w0, w1;
+        if (concatMode == 'prepend') {
+            w0 = newArray; w1 = existingArray;
+        }
+        if (concatMode == 'extend') {
+            w0 = existingArray; w1 = newArray;
+        }
+        if (w0 === undefined)
+            w0 = [];
+        if (w1 === undefined)
+            w1 = [];
+        return w0.concat(w1);
+    };
+    const recalcAxesRanges = function (plots) {
+        for (const key in plotDiv.layout) {
+            if (key.indexOf('yaxis') != -1) {
+                const existYAxis = plotDiv.layout[key];
+                const respYAxis = plots.layout[key];
+                if (respYAxis === undefined)
+                    continue;
+                const existRange = existYAxis.range;
+                const respRange = respYAxis.range;
+                if (respRange === undefined)
+                    continue;
+                if (existRange === undefined) {
+                    existYAxis.range = respRange;
+                } else {
+                    const rangeMin = Math.min(existRange[0], respRange[0]);
+                    const rangeMax = Math.max(existRange[1], respRange[1]);
+                    existYAxis.range = [rangeMin, rangeMax];
+                }
+            }
+        }
+    };
+    const concatPlotData = function (plots, mode) {
+        const plotsData = plots['data'];
+        const tracesData = {x: [], y: []};
+        const tracesIndices = [];
+        const newTraces = [];
+        for (const respIdx in plotsData) {  // Add traces missing from existing
+            let respTrace = plotsData[respIdx];
+            let isNewTrace = true;
+            for (const existIdx in plotDiv.data) {
+                let existTrace = plotDiv.data[existIdx];
+                let respTraceId = respTrace.meta.id;
+                let existTraceId = existTrace.meta.id;
+                if (respTraceId != existTraceId)
+                    continue;
+                tracesData.x.push(respTrace.x);
+                tracesData.y.push(respTrace.y);
+                tracesIndices.push(Number(existIdx));
+                if (existTrace.type == 'bar') {
+                    existTrace.width = concatArrays(existTrace.width, respTrace.width, mode);
+                    existTrace.base = concatArrays(existTrace.base, respTrace.base, mode);
+                    existTrace.text = concatArrays(existTrace.text, respTrace.text, mode);
+                }
+                isNewTrace = false;
+                break;
+            }
+            if (isNewTrace)
+                newTraces.push(respTrace);
+        }
+        plotDiv.layout.shapes = concatArrays(plotDiv.layout.shapes, plots.layout.shapes, mode);
+        plotDiv.layout.annotations = concatArrays(plotDiv.layout.annotations, plots.layout.annotations, mode);
+        recalcAxesRanges(plots);
+        if (tracesIndices.length > 0) {
+            if (mode == 'prepend')
+                Plotly.prependTraces(plotDiv, tracesData, tracesIndices);
+            if (mode == 'extend')
+                Plotly.extendTraces(plotDiv, tracesData, tracesIndices);
+        }
+        if (newTraces.length > 0) {
+            Plotly.addTraces(plotDiv, newTraces);
+        }
+    };
+    const plotData = function (plots, mode) {
+        Plotly.setPlotConfig(plotlyConfig);
+        if (mode == 'prepend' || mode == 'extend') {
+            concatPlotData(plots, mode);
+        } else {
+            Plotly.react(plotDiv, plots);
+        }
+        adjustTicks();
+        // TODO: Reposition last datum annotations based on axis scale to prevent overlap
+        // TODO: Automatically move "now" vline regularly and relayout
+    };
+    const createPlot = function (loadFrom, loadTo, exclusiveBounds, mode) {
+        const queryArgs = {};
         if (loadFrom)
             queryArgs['from'] = (new Date(loadFrom)).toISOString();
         if (loadTo)
@@ -60,7 +150,7 @@ $(window).on('load', function () {
             queryArgs['exclusive'] = exclusiveBounds?'1':'0';
         if (mode !== undefined)
             queryArgs['mode'] = mode;
-        let loadFail = function () {
+        const loadFail = function () {
             updateTimerEl.text('failed requesting data, try refreshing the page');
             disableAutoRefresh();
         };
@@ -71,102 +161,16 @@ $(window).on('load', function () {
             cache: false,
             dataType: 'json',
             timeout: 20000
-        }).done(function (data, textStatus, jqXHR) {
+        }).done(function (data /*, textStatus, jqXHR*/) {
             if (data != null && data['status'] == 'SUCCESS') {
-                Plotly.setPlotConfig(plotlyConfig);
-                let plots = data['plots'];
-                if (mode == 'prepend' || mode == 'extend') {
-                    let concatArrays = function (existingArray, newArray, concatMode) {
-                        if (existingArray === undefined && newArray === undefined)
-                            return undefined;
-                        let w0, w1;
-                        if (concatMode == 'prepend') {
-                            w0 = newArray; w1 = existingArray;
-                        }
-                        if (concatMode == 'extend') {
-                            w0 = existingArray; w1 = newArray;
-                        }
-                        if (w0 === undefined)
-                            w0 = [];
-                        if (w1 === undefined)
-                            w1 = [];
-                        return w0.concat(w1);
-                    };
-                    let plotsData = plots['data'];
-                    let tracesData = {x: [], y: []};
-                    let tracesIndices = [];
-                    let newTraces = [];
-                    for (const respIdx in plotsData) {  // Add traces missing from existing
-                        let respTrace = plotsData[respIdx];
-                        let isNewTrace = true;
-                        for (const existIdx in plotDiv.data) {
-                            let existTrace = plotDiv.data[existIdx];
-                            let respTraceId = respTrace.meta.id;
-                            let existTraceId = existTrace.meta.id;
-                            if (respTraceId != existTraceId)
-                                continue;
-                            tracesData.x.push(respTrace.x);
-                            tracesData.y.push(respTrace.y);
-                            tracesIndices.push(Number(existIdx));
-                            if (existTrace.type == 'bar') {
-                                existTrace.width = concatArrays(existTrace.width, respTrace.width, mode);
-                                existTrace.base = concatArrays(existTrace.base, respTrace.base, mode);
-                                existTrace.text = concatArrays(existTrace.text, respTrace.text, mode);
-                            }
-                            isNewTrace = false;
-                            break;
-                        }
-                        if (isNewTrace)
-                            newTraces.push(respTrace);
-                    }
-                    plotDiv.layout.shapes = concatArrays(plotDiv.layout.shapes, plots.layout.shapes, mode);
-                    plotDiv.layout.annotations = concatArrays(plotDiv.layout.annotations, plots.layout.annotations, mode);
-                    for (key in plotDiv.layout) {  // recalc axis ranges, keeping track of existing ones
-                        if (key.indexOf('yaxis') != -1) {
-                            let existYAxis = plotDiv.layout[key];
-                            let respYAxis = plots.layout[key];
-                            if (respYAxis === undefined)
-                                continue;
-                            let existRange = existYAxis.range;
-                            let respRange = respYAxis.range;
-                            if (respRange === undefined)
-                                continue;
-                            if (existRange === undefined) {
-                                existYAxis.range = respRange;
-                            } else {
-                                let rangeMin = Math.min(existRange[0], respRange[0]);
-                                let rangeMax = Math.max(existRange[1], respRange[1]);
-                                existYAxis.range = [rangeMin, rangeMax];
-                            }
-                        }
-                    }
-                    if (tracesIndices.length > 0) {
-                        if (mode == 'prepend')
-                            Plotly.prependTraces(plotDiv, tracesData, tracesIndices);
-                        if (mode == 'extend')
-                            Plotly.extendTraces(plotDiv, tracesData, tracesIndices);
-                    }
-                    if (newTraces.length > 0) {
-                        Plotly.addTraces(plotDiv, newTraces);
-                    }
-                } else {
-                    Plotly.react(plotDiv, plots);
-                }
-                adjustTicks();
-                // TODO: Reposition last datum annotations based on axis scale to prevent overlap
-                // TODO: Automatically move "now" vline regularly and relayout
-                let timestampsRange = data['timestamps_range'];
-                if (timestampsRange && timestampsRange[0]) {
-                    if (mode == 'prepend' || mode == 'extend')
-                        loadedFrom = Math.min(timestampsRange[0], loadedFrom);
-                    else
-                        loadedFrom = timestampsRange[0];
-                }
-                if (timestampsRange && timestampsRange[1]) {
-                    if (mode == 'prepend' || mode == 'extend')
-                        loadedTo = Math.max(timestampsRange[1], loadedTo);
-                    else
-                        loadedTo = timestampsRange[1];
+                plotData(data['plots'], mode);
+                const prependOrExtendMode = (mode == 'prepend' || mode == 'extend');
+                const timestampsRange = data['timestamps_range'];
+                if (timestampsRange) {
+                    if (timestampsRange[0])
+                        loadedFrom = prependOrExtendMode ? Math.min(timestampsRange[0], loadedFrom) : timestampsRange[0];
+                    if (timestampsRange[1])
+                        loadedTo = prependOrExtendMode ? Math.min(timestampsRange[1], loadedTo) : timestampsRange[1];
                 }
                 expectedUpdateInterval = data['next_update_in'];
                 if (autoRefresh && expectedUpdateInterval != null) {
@@ -181,7 +185,7 @@ $(window).on('load', function () {
             ajaxPending = false;
         });
     };
-    let refreshUpdateTimer = function () {
+    const refreshUpdateTimer = function () {
         if (ajaxPending)
             updateTimerEl.text('requesting data, please wait');
         else if (!autoRefresh)
