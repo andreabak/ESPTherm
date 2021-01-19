@@ -64,7 +64,7 @@ def auth_page() -> Response:
     if request.method == 'POST':  # Check auth
         response: MutableMapping[str, Any] = {}
         received_code: Optional[str] = request.form.get('secret_code') if request.form else None
-        if received_code and received_code == server_config['ui_secret_code']:
+        if received_code and received_code == str(server_config['ui_secret_code']):
             response['status'] = 'SUCCESS'
             response['redirect'] = url_for('homepage')
             session_id: str = create_session_cookie()
