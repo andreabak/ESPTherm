@@ -22,7 +22,7 @@ from ... import app
 from ...base import UniqueHashable, LiveFileData, ensure_tz, chunked
 from ...config import LOGS_PATH, LOGS_EXT, LOGS_DB_PATH, LOGS_ROTATE_SIZE
 
-from .common import DeviceBound, iterate_type_id_paths
+from .common import DeviceBound, iterate_type_id_paths, DeviceTypeRegistrar
 
 if TYPE_CHECKING:
     from .config import DeviceConfig
@@ -38,7 +38,7 @@ __all__ = [
 # TODO: Refactor some methods to remove redundant device_type args
 # pylint: disable=invalid-name
 @dataclasses.dataclass(frozen=True)
-class LogRecord(ABC):
+class LogRecord(DeviceTypeRegistrar, ABC):
     """
     Abstract base dataclass for device log records
     """
@@ -58,65 +58,6 @@ class LogRecord(ABC):
 
     DB_IDX_FIELDS: ClassVar[Set[str]] = {'timestamp'}
     """Set of field names that are indexed columns in the database device-type's table"""
-
-    _device_types_classes: ClassVar[MutableMapping[str, Type[LogRecord]]] = {}
-
-    @staticmethod
-    @abstractmethod
-    def _get_device_type() -> str:
-        """
-        Abstract static method that subclasses must implement
-        to return the associated device type as string.
-        N.B. if two subclasses are defined with the same device type,
-             a NameError will be raised.
-        """
-
-    @classmethod
-    def get_known_types_classes(cls) -> Iterator[Tuple[str, Type[LogRecord]]]:
-        """
-        Iterates through all the defined `LogRecord` classes for each device type.
-        :return: an iterator of tuples of (device_type, log_record_class)
-        """
-        for k, v in cls._device_types_classes.items():
-            yield k, v
-
-    def __init_subclass__(cls):
-        """
-        Initializes a defined `LogRecord` subclass, registering it's associated device type.
-        :raise NameError: if a subclass is being initialized with the same device type as an another one
-        """
-        device_type: str = cls._get_device_type()
-        existing_device_type_class: Type[LogRecord] = cls._device_types_classes.get(device_type)
-        if existing_device_type_class is not None:
-            raise NameError(f'More than one {LogRecord.__name__} class with same device type "{device_type}" defined: '
-                            f'{existing_device_type_class.__name__} and {cls.__name__}')
-        cls._device_types_classes[device_type] = cls
-
-    @classmethod
-    def get_class_for_device_type(cls, device_type: str) -> Type[LogRecord]:
-        """
-        Gets the `LogRecord` class for the given device type.
-        :param device_type: the device type for which to get the `LogRecord` class
-        :raise NameError: if no class for the given device type is found
-        :return: the registered `LogRecord` class for the device type
-        """
-        log_class: Optional[Type[LogRecord]] = cls._device_types_classes.get(device_type)
-        if log_class is None:
-            raise NameError(f'No log record class found for device type "{device_type}"')
-        return log_class
-
-    @classmethod
-    def for_type(cls, device_type: str, *args, **kwargs) -> LogRecord:
-        """
-        Creates a `LogRecord` instance using the appropriate subclass for the given device type
-        :param device_type: the device type for which to instantiate the correct `LogRecord` subclass
-        :param args: additional positional arguments to be passed to the `LogRecord` subclass' `__init__(...)`
-        :param kwargs: additional keyword arguments to be passed to the `LogRecord` subclass' `__init__(...)`
-        :return: the instantiated `LogRecord` subclass' instance
-        """
-        log_class = cls.get_class_for_device_type(device_type)
-        # noinspection PyArgumentList
-        return log_class(*args, **kwargs)
 
     @classmethod
     @abstractmethod

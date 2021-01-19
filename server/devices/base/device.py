@@ -6,6 +6,7 @@ from abc import ABC, abstractmethod
 from datetime import datetime, timedelta
 from typing import Tuple, Optional, TypeVar, Generic, ClassVar, MutableMapping, Type, Iterator
 
+from .common import DeviceTypeRegistrar
 from .config import DeviceConfig
 from .log import DeviceLog
 
@@ -24,30 +25,20 @@ LT = TypeVar('LT', bound=DeviceLog)
 
 
 # noinspection SyntaxError
-class Device(ABC, Generic[CT, LT]):
+class Device(DeviceTypeRegistrar, ABC, Generic[CT, LT]):
     """
     Abstract base class that represents a device and its related data
     """
-    _device_types_classes: ClassVar[MutableMapping[str, Type[Device]]] = {}
     _known_devices: ClassVar[MutableMapping[DeviceFullID, Device]] = {}
     _cached_configs: ClassVar[MutableMapping[DeviceOptionalID, CT]] = {}
 
     @staticmethod
     @abstractmethod
-    def _get_device_type() -> str:
-        """
-        Abstract static method that subclasses must implement
-        to return the associated device type as string.
-        N.B. if two subclasses are defined with the same device type,
-             a NameError will be raised.
-        """
-
-    @staticmethod
     def _get_config_class() -> Type[DeviceConfig]:
         """
-        Static method that returns the class used as `DeviceConfig`.
+        Abstract static method that subclasses must implement to return
+        the associated `DeviceConfig` subclass for their specific device type.
         """
-        return DeviceConfig
 
     @staticmethod
     @abstractmethod
@@ -56,43 +47,6 @@ class Device(ABC, Generic[CT, LT]):
         Abstract static method that subclasses must implement to return
         the associated `DeviceLog` subclass for their specific device type.
         """
-
-    def __init_subclass__(cls, **kwargs):
-        """
-        Initializes a defined `Device` subclass, registering it's associated device type.
-        :raise NameError: if a subclass is being initialized with the same device type as an another one
-        """
-        device_type: str = cls._get_device_type()
-        existing_device_type_class: Type[Device] = cls._device_types_classes.get(device_type)
-        if existing_device_type_class is not None:
-            raise NameError(f'More than one {Device.__name__} class with same device type "{device_type}" defined: '
-                            f'{existing_device_type_class.__name__} and {cls.__name__}')
-        cls._device_types_classes[device_type] = cls
-
-    @classmethod
-    def get_class_for_device_type(cls, device_type) -> Type[Device]:
-        """
-        Gets the `Device` class for the given device type.
-        :param device_type: the device type for which to get the `Device` class
-        :raise NameError: if no class for the given device type is found
-        :return: the registered `Device` class for the device type
-        """
-        device_type_cls: Optional[Type[Device]] = cls._device_types_classes.get(device_type)
-        if device_type_cls is None:
-            raise KeyError(f'No {Device.__name__} subclass found for device type "{device_type}"')
-        return device_type_cls
-
-    @classmethod
-    def for_type(cls, device_type: str, *args, **kwargs) -> Device:
-        """
-        Creates a `Device` instance using the appropriate subclass for the given device type
-        :param device_type: the device type for which to instantiate the correct `Device` subclass
-        :param args: additional positional arguments to be passed to the `Device` subclass' `__init__(...)`
-        :param kwargs: additional keyword arguments to be passed to the `Device` subclass' `__init__(...)`
-        :return: the instantiated `Device` subclass' instance
-        """
-        device_cls = cls.get_class_for_device_type(device_type)
-        return device_cls(*args, **kwargs)
 
     @classmethod
     def _register_instance(cls, instance: Device) -> None:

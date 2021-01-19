@@ -5,18 +5,32 @@ from __future__ import annotations
 import dataclasses
 from abc import abstractmethod
 from datetime import datetime
-from typing import Optional, List, Type, Mapping, Any
+from typing import Optional, List, Type
 
 from dateutil.parser import parse as dateutil_parser
 
 from .base import DeviceConfig, LogRecord, DeviceLog
-from .tempsdevices import TempsDeviceLogRecord, TempSetLogRecord, TempsDeviceLog, TempsDevice
+from .tempsdevices import TempsDeviceConfig, TempsDeviceLogRecord, TempSetLogRecord, TempsDeviceLog, TempsDevice
+
 
 __all__ = [
     "ThermLogRecord",
     "ThermDeviceLog",
     "ThermDevice",
 ]
+
+
+class ThermConfig(TempsDeviceConfig):
+    """
+    `DeviceConfig` subclass for "therm" device types
+    """
+    @staticmethod
+    def _get_device_type() -> str:
+        return 'therm'
+
+    @property
+    def sched_temps(self) -> List[float]:
+        return self['thermostat']['sched_temps']
 
 
 @dataclasses.dataclass(frozen=True)
@@ -82,24 +96,19 @@ class ThermDeviceLog(TempsDeviceLog):
     def get_logrecord_class() -> Type[LogRecord]:
         return ThermLogRecord
 
-    @staticmethod
-    def get_sched_temps(config: Mapping[str, Any]) -> List[float]:
-        """
-        Helper static method to get the schedule temperatures from a given device config dict.
-        :param config: a mapping-like object (config or dict)
-        :return: the list of hourly scheduled temperatures
-        """
-        return config['thermostat']['sched_temps']
-
 
 # pylint: disable=missing-function-docstring,unsubscriptable-object
-class ThermDevice(TempsDevice[DeviceConfig, ThermDeviceLog]):
+class ThermDevice(TempsDevice[ThermConfig, ThermDeviceLog]):
     """
     `Device` subclass for "therm" device types
     """
     @staticmethod
     def _get_device_type() -> str:
         return 'therm'
+
+    @staticmethod
+    def _get_config_class() -> Type[DeviceConfig]:
+        return ThermConfig
 
     @staticmethod
     def _get_log_class() -> Type[DeviceLog]:

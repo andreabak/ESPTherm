@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import json
 import os
-from typing import Optional, Iterator, Tuple, IO, MutableMapping, Any, TYPE_CHECKING
+from abc import ABC
+from typing import Optional, Iterator, Tuple, IO, MutableMapping, Any, TYPE_CHECKING, Type
 
 from ...base import UniqueHashable, LiveFileData
 from ...config import DEFAULT_CONFIG_BASENAME, CONFIGS_PATH, CONFIGS_EXT
 
-from .common import iterate_type_id_paths
+from .common import iterate_type_id_paths, DeviceTypeRegistrar
 
 if TYPE_CHECKING:
     from .device import Device
@@ -20,7 +21,7 @@ __all__ = [
 ]
 
 
-class DeviceConfig(UniqueHashable, LiveFileData, dict):
+class DeviceConfig(DeviceTypeRegistrar, UniqueHashable, LiveFileData, dict, ABC):
     """
     Class that represents a device's configuration, subclasses dict
     """
@@ -75,8 +76,9 @@ class DeviceConfig(UniqueHashable, LiveFileData, dict):
         if not os.path.exists(config_path):
             raise FileNotFoundError(f'Device config file does not exist: {config_path}')
         config_mtime: float = cls.file_mtime(path=config_path)
-        config: DeviceConfig = cls(device_type=device_type, device_id=device_id,
-                                   loaded_path=config_path, loaded_mtime=config_mtime)
+        config_cls: Type[DeviceConfig] = cls.get_class_for_device_type(device_type)
+        config: DeviceConfig = config_cls(device_type=device_type, device_id=device_id,
+                                          loaded_path=config_path, loaded_mtime=config_mtime)
         fp: IO
         with open(config_path, 'r') as fp:
             config_data: MutableMapping[str, Any] = json.load(fp)

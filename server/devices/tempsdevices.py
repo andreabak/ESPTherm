@@ -1,17 +1,31 @@
 """Base devices definitions for devices that log temperatures"""
 import dataclasses
-from abc import ABC
-from typing import TypeVar, Optional
+from abc import ABC, abstractmethod
+from typing import TypeVar, Optional, List
 
 from .base import DeviceConfig, DeviceLog, Device
 
 
 __all__ = [
+    "TempsDeviceConfig",
     "TempsDeviceLogRecord",
     "TempSetLogRecord",
     "TempsDeviceLog",
     "TempsDevice",
 ]
+
+
+class TempsDeviceConfig(DeviceConfig, ABC):
+    """
+    Base abstract class for `DeviceConfig` subclasses of devices that log temperatures
+    """
+    @property
+    @abstractmethod
+    def sched_temps(self) -> List[float]:
+        """
+        Helper property to get the config schedule temperatures from a given device config dict.
+        :return: the list of hourly scheduled temperatures
+        """
 
 
 @dataclasses.dataclass(frozen=True)
@@ -40,9 +54,9 @@ class TempsDeviceLog(DeviceLog, ABC):
     """Base abstract class for `DeviceLog` subclasses of devices that log temperatures"""
 
 
-CT = TypeVar('CT', bound=DeviceConfig)
-TLT = TypeVar('TLT', bound=TempsDeviceLog)
+CT = TypeVar('CT', bound=TempsDeviceConfig)
+LT = TypeVar('LT', bound=TempsDeviceLog)
 
 
-class TempsDevice(Device[CT, TLT], ABC):
+class TempsDevice(Device[CT, LT], ABC):
     """Base abstract class for `Device` subclasses of devices that log temperatures"""
