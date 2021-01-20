@@ -8,7 +8,7 @@ from flask import request, jsonify, abort, Response
 
 from . import app
 from .config import server_config
-from .devices import DeviceLog, Device, DeviceConfig, LogRecord
+from .devices.base import DeviceConfig, LogRecord, DeviceLog, Device
 
 
 @app.route('/<string:device_type>/upload_log', methods=['POST'])
@@ -91,7 +91,7 @@ def state_set(device_type: str) -> Response:
     :param device_type: the device type
     :return: the response for the device, json data with an object of state values overrides or empty
     """
-    device_id: Optional[str] = request.args.get('deviceid')
+    device_id: Optional[str] = request.args.get('deviceid')  # TODO: Feature expansion  # pylint: disable=unused-variable
 
     data: Dict = {}
 
@@ -113,9 +113,9 @@ def state_set(device_type: str) -> Response:
             link_device_type, link_device_id = switch_link_full_id.split('/')
             try:
                 link_device: Device = Device.get_known_device(link_device_type, link_device_id)
-            except KeyError:
+            except KeyError as exc:
                 raise RemoteThermException(f'Remote therm has switch_link_id="{switch_link_full_id}", '
-                                           f'but no known device with that id exists')
+                                           f'but no known device with that id exists') from exc
             link_device_max_log_age: int = remote_therm_cfg.get('max_log_age', 30)
             recent_log: DeviceLog = link_device.get_log(
                 timestamp_min=datetime.now() - timedelta(minutes=link_device_max_log_age))
