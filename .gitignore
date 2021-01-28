@@ -52,6 +52,7 @@ Temporary Items
 
 # PyCharm
 /.idea/
+.dmypy.json
 
 # Project-specific files and directories
 /.runenv/
@@ -59,5 +60,6 @@ Temporary Items
 # Ignore device-specific configs, but not default ones
 /configs/*/*.json
 !/configs/*/_default.json
+/images/originals/
 *.ffs_db
 *.TEMP
