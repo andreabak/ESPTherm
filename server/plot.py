@@ -157,29 +157,152 @@ def make_masked_arrays(*arrays: np.ndarray, mask: np.ndarray, log: DeviceLog) ->
     return tuple(a[mask] for a in arrays)
 
 
+def mktrace(
+    *,
+    log: DeviceLog,
+    timeaxis_masked: np.ndarray,
+    values_masked: np.ndarray,
+    data_name: str,
+    yaxis: str,
+    hue: float,
+    line_dash: str = "solid",
+    opacity: float = 1.0,
+) -> Optional[BaseTraceType]:
+    trace: Optional[BaseTraceType]
+    if values_masked.size:
+        return plotly_go.Scatter(
+            x=timeaxis_masked,
+            y=values_masked,
+            yaxis=yaxis,
+            name=f"{log.device_id} {data_name}",
+            meta=dict(id=f"{log_device_full_id(log)}.{data_name}_main"),
+            legendgroup=log_device_full_id(log),
+            line=dict(
+                shape="spline",
+                width=2,
+                color=f"hsla({hue:.0f}, 100%, 55%, 0.75)",
+                dash=line_dash,
+            ),
+            opacity=opacity,
+        )
+    else:
+        return None
+
+
 @log_cacheable
-def mktrace_main(*, log: DeviceLog, timeaxis: np.ndarray, field_name: str, data_name: str, yaxis: str,
-                 hue: float, line_dash: str = 'solid', opacity: float = 1.0) \
-        -> Tuple[Optional[BaseTraceType], np.ndarray, np.ndarray, Tuple[float, float]]:
+def mktrace_field(
+    *,
+    log: DeviceLog,
+    timeaxis: np.ndarray,
+    field_name: str,
+    data_name: str,
+    yaxis: str,
+    hue: float,
+    line_dash: str = "solid",
+    opacity: float = 1.0,
+) -> Tuple[Optional[BaseTraceType], np.ndarray, np.ndarray, Tuple[float, float]]:
     values: np.ndarray
     mask: np.ndarray
     values, mask = make_np_array(log=log, field_name=field_name)
     timeaxis_masked: np.ndarray
     values_masked: np.ndarray
-    timeaxis_masked, values_masked = make_masked_arrays(timeaxis, values, mask=mask, log=log)
-    trace: Optional[BaseTraceType]
-    if mask.size:
-        trace = plotly_go.Scatter(
-            x=timeaxis_masked, y=values_masked, yaxis=yaxis,
-            name=f'{log.device_id} {data_name}',
-            meta=dict(id=f'{log_device_full_id(log)}.{data_name}_main'),
-            legendgroup=log_device_full_id(log),
-            line=dict(shape='spline', width=2, color=f'hsla({hue:.0f}, 100%, 55%, 0.75)', dash=line_dash),
-            opacity=opacity
-        )
-    else:
-        trace = None
+    timeaxis_masked, values_masked = make_masked_arrays(
+        timeaxis, values, mask=mask, log=log
+    )
+    trace: Optional[BaseTraceType] = mktrace(
+        log=log,
+        timeaxis_masked=timeaxis_masked,
+        values_masked=values_masked,
+        data_name=data_name,
+        yaxis=yaxis,
+        hue=hue,
+        line_dash=line_dash,
+        opacity=opacity,
+    )
     return trace, values_masked, timeaxis_masked, get_percentile_range(values_masked)
+
+
+@log_cacheable
+def make_heat_index(
+    *,
+    temps_field_name: str,
+    rhs_field_name: str,
+    log: DeviceLog,
+) -> Tuple[np.ndarray, np.ndarray]:
+    temps_all: np.ndarray
+    temps_mask: np.ndarray
+    temps_all, temps_mask = make_np_array(log=log, field_name=temps_field_name)
+    rh_all: np.ndarray
+    rh_mask: np.ndarray
+    rh_all, rh_mask = make_np_array(log=log, field_name=rhs_field_name)
+    heat_indices_masked: np.ndarray
+    mask: np.ndarray = temps_mask & rh_mask
+    temps: np.ndarray
+    rh: np.ndarray
+    temps, rh = make_masked_arrays(temps_all, rh_all, mask=mask, log=log)
+    a: float = 17.27
+    b: float = 237.3
+    alphas: np.ndarray = ((a * temps) / (b + temps)) + np.log(rh / 100)
+    dew_temps: np.ndarray = (b * alphas) / (a - alphas)
+    c1: float = 1.0799
+    c2: float = 0.03755
+    c3: float = 0.0801
+    c4: float = 14.0
+    heat_indices: np.ndarray
+    heat_indices = temps - c1 * np.exp(c2 * temps) * (1 - np.exp(c3 * (dew_temps - c4)))
+    return heat_indices, mask
+
+
+def add_heat_index_trace(
+    *, log: DeviceLog, timeaxis: np.ndarray, hue: float, **trace_kwargs: Any
+):
+    def make_times_values(
+        temps_field_name, rhs_field_name
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        heat_indices_masked: np.ndarray
+        mask: np.ndarray
+        heat_indices_masked, mask = make_heat_index(
+            temps_field_name=temps_field_name, rhs_field_name=rhs_field_name, log=log
+        )
+        timeaxis_masked: np.ndarray
+        (timeaxis_masked,) = make_masked_arrays(timeaxis, mask=mask, log=log)
+        return timeaxis_masked, heat_indices_masked
+
+    heat_indices_masked: np.ndarray
+    timeaxis_masked: np.ndarray
+    timeaxis_masked, heat_indices_masked = make_times_values(
+        temps_field_name="temp_average", rhs_field_name="humidity_average"
+    )
+
+    @log_cacheable
+    def mktrace_heat_index(
+        *, log, timeaxis, **mktrace_kwargs
+    ) -> Tuple[Optional[BaseTraceType], np.ndarray, np.ndarray, Tuple[float, float]]:
+        nonlocal heat_indices_masked, timeaxis_masked
+        trace: Optional[BaseTraceType] = mktrace(
+            log=log,
+            timeaxis_masked=timeaxis_masked,
+            values_masked=heat_indices_masked,
+            **mktrace_kwargs,
+        )
+        values_range: Tuple[float, float] = get_percentile_range(heat_indices_masked)
+        return trace, heat_indices_masked, timeaxis_masked, values_range
+
+    raw_data_getter = lambda log: make_times_values(
+        temps_field_name="temp_current", rhs_field_name="humidity_current"
+    )
+
+    hue = math.fmod(hue + 30, 360)
+    add_trace(
+        log=log,
+        timeaxis=timeaxis,
+        main_mktrace_fn=mktrace_heat_index,
+        raw_data_getter=raw_data_getter,
+        data_name="HI",
+        annotation_postfix="°C",
+        hue=hue,
+        **trace_kwargs,
+    )
 
 
 @log_cacheable
@@ -606,6 +729,8 @@ def create_plot_figure(devices: List[Device], plot_mode: Optional[str] = None,
 
     plot_until: datetime = datetime.now().replace(minute=0, second=0, microsecond=0) + timedelta(hours=3)
 
+    is_summer: bool = 5 <= datetime.now().month <= 9
+
     hue: float = 210.0
     for device in devices:
         log: DeviceLog = log_getter(device) if log_getter is not None else device.log_daily
@@ -618,25 +743,32 @@ def create_plot_figure(devices: List[Device], plot_mode: Optional[str] = None,
 
         if isinstance(log, (ThermDeviceLog, TempStationDeviceLog)):
             add_trace(fig=fig, log=log, timeaxis=timeaxis, plot_mode=plot_mode,
-                      main_mktrace_fn=partial(mktrace_main, field_name='temp_average'),
+                      main_mktrace_fn=partial(mktrace_field, field_name='temp_average'),
                       raw_data_getter='temp_current', data_name='temp',
                       yaxis='y2', yranges=y2ranges, xranges=xranges,
                       row=1, col=1, secondary_y=True,
                       annotation_postfix='°C', hue=hue)
 
-            add_set_temps_trace(fig=fig, log=log, timeaxis=timeaxis, plot_mode=plot_mode,
-                                yranges=y2ranges, xranges=xranges,
-                                row=1, col=1, secondary_y=True,
-                                predict_until=plot_until, hue=hue)
+            if not is_summer:
+                add_set_temps_trace(fig=fig, log=log, timeaxis=timeaxis, plot_mode=plot_mode,
+                                    yranges=y2ranges, xranges=xranges,
+                                    row=1, col=1, secondary_y=True,
+                                    predict_until=plot_until, hue=hue)
 
         if isinstance(log, TempStationDeviceLog):
             rh_hue: float = math.fmod(hue - 30, 360)
             add_trace(fig=fig, log=log, timeaxis=timeaxis, plot_mode=plot_mode,
-                      main_mktrace_fn=partial(mktrace_main, field_name='humidity_average'),
+                      main_mktrace_fn=partial(mktrace_field, field_name='humidity_average'),
                       raw_data_getter='humidity_current', data_name='rh',
                       yaxis='y3', yranges=y3ranges, xranges=xranges,
                       row=2, col=1, secondary_y=False,
                       annotation_postfix='°%', hue=rh_hue)
+
+            if is_summer:
+                add_heat_index_trace(fig=fig, log=log, timeaxis=timeaxis,
+                                     plot_mode=plot_mode,
+                                     yaxis='y2', yranges=y2ranges, xranges=xranges,
+                                     row=1, col=1, secondary_y=True, hue=hue)
 
         if isinstance(log, ThermDeviceLog):
             switch_hue: float = math.fmod(hue - 190, 360)
